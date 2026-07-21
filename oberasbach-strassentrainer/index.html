@@ -1,0 +1,284 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="theme-color" content="#9f1d2d" />
+  <title>Straßentrainer Oberasbach</title>
+
+  <link
+    rel="stylesheet"
+    href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+    integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY="
+    crossorigin=""
+  />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <main class="app-shell">
+    <header class="topbar">
+      <div class="brand">
+        <div class="brand-icon" aria-hidden="true">🚒</div>
+        <div>
+          <p class="eyebrow">Feuerwehr-Training</p>
+          <h1>Straßentrainer Oberasbach</h1>
+        </div>
+      </div>
+
+      <div class="scoreboard" aria-label="Spielstand">
+        <div><span id="roundValue">0</span><small>Runden</small></div>
+        <div id="scorePointsPanel"><span id="totalScoreValue">0</span><small>Punkte</small></div>
+      </div>
+    </header>
+
+    <section class="game-layout">
+      <aside class="control-panel">
+        <section id="modeCard" class="mode-card">
+          <div class="field-group">
+            <label for="modeSelect">Spielmodus</label>
+            <select id="modeSelect">
+              <option value="free">Freier Modus</option>
+              <option value="timed">Zeitmodus</option>
+              <option value="exam">Prüfungsmodus</option>
+            </select>
+          </div>
+
+          <div id="timedSettings" class="timed-settings hidden">
+            <div class="field-group">
+              <label for="secondsPerRoundSelect">Zeit pro Aufgabe</label>
+              <select id="secondsPerRoundSelect">
+                <option value="15">15 Sekunden</option>
+                <option value="30" selected>30 Sekunden</option>
+                <option value="45">45 Sekunden</option>
+              </select>
+            </div>
+            <div class="field-group">
+              <label for="totalRoundsSelect">Anzahl der Aufgaben</label>
+              <select id="totalRoundsSelect">
+                <option value="10" selected>10 Aufgaben</option>
+                <option value="25">25 Aufgaben</option>
+                <option value="50">50 Aufgaben</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="content-settings">
+            <div class="field-group">
+              <label for="contentSelectionSelect">Inhalt</label>
+              <select id="contentSelectionSelect">
+                <option value="streets">Nur Straßen</option>
+                <option value="pois">Nur Orte und Einrichtungen</option>
+                <option value="mixed">Straßen und Orte gemischt</option>
+              </select>
+            </div>
+            <label class="checkbox-row">
+              <input id="showTargetCategoryCheckbox" type="checkbox" checked />
+              <span>Kategorie beim Alarm anzeigen</span>
+            </label>
+            <details id="poiCategoryDetails" class="category-details hidden">
+              <summary>POI-Kategorien auswählen</summary>
+              <div id="poiCategoryOptions" class="category-options"></div>
+            </details>
+          </div>
+        </section>
+
+        <section class="alarm-card" aria-live="polite">
+          <div class="alarm-heading">
+            <span class="alarm-light" aria-hidden="true"></span>
+            <span>Zufallsalarm</span>
+          </div>
+
+          <p class="alarm-label">Einsatzort</p>
+          <h2 id="targetStreet">Straßendaten werden geladen …</h2>
+          <p id="targetCategoryLabel" class="target-category hidden"></p>
+          <p id="instruction" class="instruction">
+            Die lokale Straßenliste wird vorbereitet.
+          </p>
+        </section>
+
+        <section id="timerPanel" class="timer-panel hidden" aria-live="off" aria-label="Verbleibende Zeit">
+          <div class="timer-row">
+            <span>Verbleibende Zeit</span>
+            <strong><span id="timerValue">30</span> s</strong>
+          </div>
+          <div class="timer-track" aria-hidden="true">
+            <span id="timerProgress"></span>
+          </div>
+        </section>
+
+        <button id="mainButton" class="primary-button" type="button" disabled>
+          Daten werden geladen …
+        </button>
+
+        <button id="endGameButton" class="secondary-button hidden" type="button">
+          Zeittraining beenden
+        </button>
+
+        <section id="resultCard" class="result-card hidden" aria-live="polite">
+          <p id="resultTitle" class="result-title">Auswertung</p>
+          <div class="result-grid">
+            <div>
+              <strong id="distanceValue">–</strong>
+              <span>Entfernung</span>
+            </div>
+            <div>
+              <strong id="scoreValue">–</strong>
+              <span>Punkte</span>
+            </div>
+          </div>
+          <p id="resultMessage" class="result-message"></p>
+        </section>
+
+        <section id="summaryCard" class="summary-card hidden" aria-live="polite">
+          <h3>Abschlussstatistik</h3>
+          <div class="summary-grid">
+            <div><strong id="summaryTotalPoints">0</strong><span>Gesamtpunkte</span></div>
+            <div><strong id="summaryAveragePoints">0</strong><span>Ø Punkte</span></div>
+            <div><strong id="summaryAverageDistance">–</strong><span>Ø Entfernung</span></div>
+            <div><strong id="summaryAverageTime">–</strong><span>Ø Zeit</span></div>
+            <div><strong id="summaryTimeouts">0</strong><span>Zeitüberschreitungen</span></div>
+            <div><strong id="summaryHitRate">0 %</strong><span>Trefferquote</span></div>
+            <div><strong id="summaryTotalDuration">–</strong><span>Gesamtspieldauer</span></div>
+          </div>
+          <dl class="round-extremes">
+            <div><dt>Beste Aufgabe</dt><dd id="summaryBestRound">–</dd></div>
+            <div><dt>Schlechteste Aufgabe</dt><dd id="summaryWorstRound">–</dd></div>
+          </dl>
+          <div id="summaryTargetBreakdown" class="target-breakdown"></div>
+          <button id="repeatTimedButton" class="primary-button" type="button">
+            Noch einmal mit denselben Einstellungen
+          </button>
+        </section>
+
+        <section id="examResultsCard" class="exam-results-card hidden" aria-live="polite">
+          <h3>Prüfungsergebnis</h3>
+          <section id="examAwardCard" class="exam-award-card" aria-label="Spielerische Auszeichnung">
+            <div id="examAwardSymbol" class="exam-award-symbol" aria-hidden="true">•</div>
+            <div class="exam-award-content">
+              <span class="exam-award-label">Deine Auszeichnung</span>
+              <strong id="examAwardName">Auszeichnung</strong>
+              <span id="examAwardPercentage" class="exam-award-percentage">0,0 %</span>
+              <p id="examAwardDescription">Wird nach Abschluss der Prüfung berechnet.</p>
+            </div>
+          </section>
+          <p class="exam-award-disclaimer">
+            Die Bezeichnungen dienen ausschließlich der spielerischen Motivation und stellen keine echten Feuerwehrdienstgrade oder Qualifikationen dar.
+          </p>
+          <div class="summary-grid">
+            <div><strong id="examTotalPoints">0</strong><span>Gesamtpunkte</span></div>
+            <div><strong id="examMaximumPoints">0</strong><span>Maximal möglich</span></div>
+            <div><strong id="examPercentage">0 %</strong><span>Ergebnis</span></div>
+            <div><strong id="examAverageDistance">–</strong><span>Ø Entfernung</span></div>
+            <div><strong id="examAverageTime">–</strong><span>Ø Zeit</span></div>
+            <div><strong id="examHitRate">0 %</strong><span>Trefferquote</span></div>
+            <div><strong id="examUnanswered">0</strong><span>Nicht beantwortet</span></div>
+          </div>
+          <dl class="round-extremes">
+            <div><dt>Beste Aufgabe</dt><dd id="examBestRound">–</dd></div>
+            <div><dt>Schlechteste Aufgabe</dt><dd id="examWorstRound">–</dd></div>
+          </dl>
+          <div id="examTargetBreakdown" class="target-breakdown"></div>
+          <h4>Aufgaben</h4>
+          <ol id="examTaskList" class="exam-task-list"></ol>
+        </section>
+
+        <section id="statisticsCard" class="statistics-card">
+          <details id="statisticsDetails">
+            <summary>Statistik</summary>
+            <div class="statistics-content">
+              <div class="statistics-filters">
+                <div class="field-group">
+                  <label for="statisticsModeFilter">Spielmodus</label>
+                  <select id="statisticsModeFilter">
+                    <option value="all">Gesamt</option>
+                    <option value="free">Freier Modus</option>
+                    <option value="timed">Zeitmodus</option>
+                    <option value="exam">Prüfungsmodus</option>
+                  </select>
+                </div>
+                <div class="field-group">
+                  <label for="statisticsTargetFilter">Zieltyp</label>
+                  <select id="statisticsTargetFilter">
+                    <option value="all">Straßen und POIs</option>
+                    <option value="street">Nur Straßen</option>
+                    <option value="poi">Nur POIs/Einrichtungen</option>
+                  </select>
+                </div>
+              </div>
+
+              <div id="statisticsOverview" class="statistics-overview"></div>
+              <dl class="statistics-targets">
+                <div><dt>Bestes Ziel</dt><dd id="statisticsBestTarget">–</dd></div>
+                <div><dt>Schlechtestes Ziel</dt><dd id="statisticsWorstTarget">–</dd></div>
+                <div><dt>Am häufigsten gespielt</dt><dd id="statisticsMostPlayedTarget">–</dd></div>
+                <div><dt>Höchste Prüfung</dt><dd id="statisticsHighestExam">–</dd></div>
+                <div><dt>Höchster Rang</dt><dd id="statisticsHighestRank">–</dd></div>
+                <div><dt>Letztes Spiel</dt><dd id="statisticsLastPlayed">–</dd></div>
+              </dl>
+
+              <div class="statistics-import-row">
+                <div class="field-group">
+                  <label for="statisticsImportStrategy">Beim Import</label>
+                  <select id="statisticsImportStrategy">
+                    <option value="merge">Mit vorhandener Statistik zusammenführen</option>
+                    <option value="replace">Vorhandene Statistik ersetzen</option>
+                  </select>
+                </div>
+              </div>
+              <div class="statistics-actions">
+                <button id="statisticsExportButton" class="statistics-button" type="button">Statistik exportieren</button>
+                <button id="statisticsImportButton" class="statistics-button" type="button">Statistik importieren</button>
+                <button id="statisticsResetButton" class="statistics-button danger" type="button">Statistik zurücksetzen</button>
+              </div>
+              <input id="statisticsImportInput" class="hidden" type="file" accept="application/json,.json" />
+              <p id="statisticsMessage" class="statistics-message" role="status"></p>
+            </div>
+          </details>
+        </section>
+
+        <section id="legendCard" class="legend-card">
+          <h3>So funktioniert es</h3>
+          <ol>
+            <li>Merke dir den alarmierten Einsatzort.</li>
+            <li>Tippe möglichst genau auf die unbeschriftete Karte.</li>
+            <li>Die Lösung und deine Entfernung werden angezeigt.</li>
+          </ol>
+        </section>
+
+        <section id="statusCard" class="status-card">
+          <span class="spinner" aria-hidden="true"></span>
+          <p id="statusText">Initialisiere die statische Web-App …</p>
+        </section>
+      </aside>
+
+      <section id="mapPanel" class="map-panel" aria-label="Unbeschriftete Straßenkarte von Oberasbach">
+        <div id="map"></div>
+        <div class="map-hint" id="mapHint">Karte wird vorbereitet …</div>
+        <button id="returnToExamResultsButton" class="map-return-button hidden" type="button">
+          Zurück zur Ergebnisübersicht
+        </button>
+        <div class="map-attribution">
+          Kartendaten © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noreferrer">OpenStreetMap-Mitwirkende</a> · Kartenstil © CARTO
+        </div>
+      </section>
+    </section>
+  </main>
+
+  <noscript>Diese Anwendung benötigt JavaScript.</noscript>
+
+  <script
+    src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+    integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
+    crossorigin=""
+  ></script>
+  <script src="https://cdn.jsdelivr.net/npm/@turf/turf@7.3.0/turf.min.js"></script>
+  <script src="geometry.js"></script>
+  <script src="targets.js"></script>
+  <script src="statistics.js"></script>
+  <script src="game-engine.js"></script>
+  <script src="timer.js"></script>
+  <script src="data/oberasbach-streets.js"></script>
+  <script src="data/oberasbach-pois.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
