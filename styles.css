@@ -1021,6 +1021,30 @@ h1 {
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
 }
 
+.exam-overview-marker {
+  display: grid;
+  place-items: center;
+  border: 3px solid var(--marker-outline);
+  border-radius: 50%;
+  color: #ffffff;
+  font-size: 0.7rem;
+  font-weight: 900;
+  line-height: 1;
+  box-shadow: 0 2px 9px rgba(0, 0, 0, 0.42);
+}
+
+.exam-overview-guess {
+  width: 24px;
+  height: 24px;
+  background: var(--guess);
+}
+
+.exam-overview-target {
+  width: 32px;
+  height: 32px;
+  background: var(--solution);
+}
+
 .poi-solution-marker {
   width: 25px;
   height: 25px;

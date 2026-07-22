@@ -114,6 +114,7 @@ Der Prüfungsmodus bietet ebenfalls 15, 30 oder 45 Sekunden sowie 10, 25 oder 50
 - Noch nicht verwendete Ziele werden bevorzugt. Falls eine sehr kleine Kategorienauswahl weniger Ziele als Prüfungsaufgaben enthält, darf ein Ziel später erneut vorkommen, aber niemals unmittelbar hintereinander.
 - Erst nach der letzten Aufgabe berechnet die Engine Gesamtpunkte, maximal mögliche Punkte, Prozentwert, Durchschnittswerte, Trefferquote, unbeantwortete Aufgaben sowie beste und schlechteste Aufgabe.
 - Ebenfalls erst nach der letzten Aufgabe wird aus der Gesamtpunktzahl eine spielerische Auszeichnung berechnet und als Snapshot unter `gameState.summary.award` in das abgeschlossene Prüfungsergebnis aufgenommen.
+- Nach dem Prüfungsende zeigt die Karte alle beantworteten Aufgaben als nummerierte Paare: blau ist der eigene Klick, rot der nächstgelegene Punkt am jeweiligen Ziel und die gestrichelte Linie verbindet beide. Zeitüberschreitungen erzeugen weiterhin keinen erfundenen Tipp.
 - Die Aufgabenliste enthält pro Aufgabe Ziel, Entfernung, Punkte, Zeit und Status. „Auf Karte ansehen“ zeigt erst nach Prüfungsende den eigenen Tipp, die vollständige Straße und die kürzeste Verbindung.
 - Prüfungsantworten und Prüfungsergebnisse werden ausschließlich im Arbeitsspeicher gehalten. Ein bestätigtes Neuladen verwirft die laufende Prüfung und kann daher kein abgeschlossenes Ergebnis erzeugen.
 - Vor Abbruch, Moduswechsel, Neuladen und Zurücknavigation erscheint eine Sicherheitsabfrage. Browser können den genauen Text ihrer systemeigenen Navigationswarnung selbst festlegen.

@@ -426,6 +426,13 @@ vm.runInNewContext(source, context, { filename: "app.js" });
   assert.equal(elements.examResultsCard.classList.contains("hidden"), false);
   assert.equal(elements.scorePointsPanel.classList.contains("hidden"), false);
   assert.equal((elements.examTaskList.innerHTML.match(/Auf Karte ansehen/g) || []).length, 10);
+  assert.equal(context.__appTest.solutionLayers.layers.length, 9,
+    "Erst nach Prüfungsende müssen die Zielpunkte aller beantworteten Aufgaben erscheinen");
+  assert.equal(context.__appTest.answerLayers.layers.length, 18,
+    "Erst nach Prüfungsende müssen neun Tipps und ihre neun Verbindungen erscheinen");
+  assert.ok(context.__appTest.solutionLayers.layers.every(layer =>
+    layer.options.icon?.html?.includes("exam-overview-target")));
+  assert.equal(elements.mapHint.textContent.includes("Prüfungsübersicht"), true);
   const statisticsAfterCompletedExam = debug.getStatistics();
   assert.equal(statisticsAfterCompletedExam.modes.exam.gamesCompleted,
     statisticsBeforeExam.modes.exam.gamesCompleted + 1);
@@ -440,8 +447,10 @@ vm.runInNewContext(source, context, { filename: "app.js" });
   assert.equal(context.__appTest.answerLayers.layers.length, 3);
   assert.equal(elements.returnToExamResultsButton.classList.contains("hidden"), false);
   elements.returnToExamResultsButton.onclick();
-  assert.equal(context.__appTest.solutionLayers.layers.length, 0);
-  assert.equal(context.__appTest.answerLayers.layers.length, 0);
+  assert.equal(context.__appTest.solutionLayers.layers.length, 9,
+    "Die Rückkehr aus der Einzelansicht stellt die Prüfungsübersicht wieder her");
+  assert.equal(context.__appTest.answerLayers.layers.length, 18);
+  assert.equal(elements.returnToExamResultsButton.classList.contains("hidden"), true);
 
   debug.showExamRound(10);
   assert.equal(context.__appTest.solutionLayers.layers.length, 1,
@@ -449,9 +458,33 @@ vm.runInNewContext(source, context, { filename: "app.js" });
   assert.equal(context.__appTest.answerLayers.layers.length, 0,
     "Ohne Tipp darf nachträglich keine Tippmarkierung erfunden werden");
 
+  elements.contentSelectionSelect.value = "pois";
+  elements.contentSelectionSelect.onchange();
+  elements.secondsPerRoundSelect.value = "45";
+  elements.secondsPerRoundSelect.onchange();
+  elements.totalRoundsSelect.value = "25";
+  elements.totalRoundsSelect.onchange();
+  state = debug.getGameState();
+  assert.equal(state.status, "idle",
+    "Eine Einstellungsänderung nach Prüfungsende muss die neue Konfiguration öffnen");
+  assert.equal(elements.modeSelect.value, "exam",
+    "Der ausgewählte Prüfungsmodus muss bei der Neukonfiguration erhalten bleiben");
+  assert.equal(elements.mainButton.textContent, "Prüfung starten",
+    "Der Button darf nicht weiter dieselben alten Einstellungen ankündigen");
+  assert.equal(elements.examResultsCard.classList.contains("hidden"), true,
+    "Die alte Ergebnisübersicht wird beim Konfigurieren einer neuen Prüfung geschlossen");
+
   elements.mainButton.onclick();
   await nextTask();
-  assert.equal(debug.getGameState().status, "active");
+  state = debug.getGameState();
+  assert.equal(state.status, "active");
+  assert.equal(state.config.mode, "exam");
+  assert.equal(state.config.secondsPerRound, 45,
+    "Die neu gewählte Aufgabenzeit muss übernommen werden");
+  assert.equal(state.config.totalRounds, 25,
+    "Die neu gewählte Aufgabenanzahl muss übernommen werden");
+  assert.equal(state.config.contentSelection, "pois",
+    "Die neu gewählte Inhaltsauswahl muss übernommen werden");
   const statisticsAfterSecondExamStart = JSON.stringify(debug.getStatistics());
   const unloadEvent = {
     returnValue: null,
@@ -537,7 +570,7 @@ vm.runInNewContext(source, context, { filename: "app.js" });
   console.log("- Timerstart nach Vorbereitung, 10 Runden, Timeout und Wiederholung");
   console.log("- vorzeitiger Abbruch stoppt den Timer");
   console.log("- vollständige Prüfung mit 10 Aufgaben ohne Zwischenauflösung");
-  console.log("- Abschlussliste, Karten-Nachprüfung und unbeantwortete Aufgabe");
+  console.log("- nummerierte Prüfungsübersicht, Karten-Nachprüfung und unbeantwortete Aufgabe");
   console.log("- spielerische Auszeichnung aus dem endgültigen Prüfungsergebnis");
   console.log("- getrennte Statistik sowie Warnungen bei Reload, Zurück und Abbruch");
   console.log("- lokale POIs, ausblendbare Kategorie, gespeicherte Auswahl und gemischte Balance");

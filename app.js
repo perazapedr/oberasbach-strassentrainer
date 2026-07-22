@@ -349,11 +349,7 @@ function handleContentSelectionChange() {
   applyContentSettingsToControls();
   applyContentSettingsToGameConfig();
   saveContentSettings();
-  if (gameState.status === GAME_STATUS.IDLE) {
-    const selectedMode = els.modeSelect.value;
-    if (isCountdownMode(selectedMode)) renderCountdownConfiguration(selectedMode);
-    else renderIdleGame();
-  }
+  refreshConfigurationAfterSettingsChange();
 }
 
 function handleCategoryVisibilityChange() {
@@ -363,6 +359,7 @@ function handleCategoryVisibilityChange() {
   if (gameState.status === GAME_STATUS.ACTIVE && gameState.currentRound?.target) {
     renderTargetCategory(gameState.currentRound.target);
   }
+  refreshConfigurationAfterSettingsChange();
 }
 
 function handlePoiCategoryChange(event) {
@@ -382,6 +379,25 @@ function handlePoiCategoryChange(event) {
     .filter(id => selected.has(id));
   applyContentSettingsToGameConfig();
   saveContentSettings();
+  refreshConfigurationAfterSettingsChange();
+}
+
+function refreshConfigurationAfterSettingsChange() {
+  const selectedMode = els.modeSelect.value;
+  if (gameState.status === GAME_STATUS.FINISHED) {
+    stopAllTimers();
+    roundPreparationToken += 1;
+    deactivateExamHistoryGuard();
+    examGeometryByRound.clear();
+    gameEngine.resetGame();
+    mapView.clearRound();
+    mapView.resetViewport(false);
+    els.returnToExamResultsButton.classList.add("hidden");
+    els.modeSelect.value = selectedMode;
+  }
+  if (gameState.status !== GAME_STATUS.IDLE) return;
+  if (isCountdownMode(selectedMode)) renderCountdownConfiguration(selectedMode);
+  else renderIdleGame();
 }
 
 function getEligibleTargetsByType(targetType) {
@@ -1069,7 +1085,7 @@ function resetStatistics() {
 function handleMainButton() {
   cancelAutoAdvance();
   if (gameState.config.mode === "exam" && gameState.status === GAME_STATUS.FINISHED) {
-    startCountdownGame({ ...gameState.config });
+    startCountdownGame(getCountdownConfigFromControls("exam"));
     return;
   }
   if (["timed", "exam"].includes(els.modeSelect.value)
@@ -1246,7 +1262,7 @@ function finishGame(options = {}) {
     els.summaryCard.classList.add("hidden");
     els.legendCard.classList.add("hidden");
     renderExamResults(gameState.summary, gameState.results);
-    els.mapHint.textContent = "Wähle eine Aufgabe aus, um sie auf der Karte nachzusehen.";
+    renderExamAnswerOverview();
     setStatus("Die Prüfung ist abgeschlossen. Erst jetzt sind Bewertungen und Lösungen sichtbar.", "ready");
     renderScoreboard();
   } else if (gameState.config.mode === "timed") {
@@ -1393,10 +1409,8 @@ function renderExamResults(summary, results) {
   els.examResultsCard.classList.remove("hidden");
 }
 
-function showExamRoundOnMap(roundNumber) {
-  if (gameState.config.mode !== "exam" || gameState.status !== GAME_STATUS.FINISHED) return;
-  const result = gameState.results.find(candidate => candidate.roundNumber === roundNumber);
-  const geometry = examGeometryByRound.get(roundNumber);
+function getExamTargetForResult(result) {
+  const geometry = examGeometryByRound.get(result?.roundNumber);
   const target = result && geometry ? {
     id: result.targetId,
     name: result.targetName,
@@ -1405,7 +1419,86 @@ function showExamRoundOnMap(roundNumber) {
     categoryLabel: result.targetCategoryLabel,
     geometry
   } : null;
-  if (!targetApi.isValidTargetGeometry(target, geometryApi)) return;
+  return targetApi.isValidTargetGeometry(target, geometryApi) ? target : null;
+}
+
+function renderExamAnswerOverview() {
+  if (gameState.config.mode !== "exam" || gameState.status !== GAME_STATUS.FINISHED) return 0;
+  mapView.clearRound();
+  const overviewPoints = [];
+  let answeredCount = 0;
+
+  gameState.results.forEach(result => {
+    if (!result.guessCoordinates) return;
+    const target = getExamTargetForResult(result);
+    if (!target) return;
+    const evaluation = evaluateDistanceToTarget(
+      target,
+      [result.guessCoordinates.lng, result.guessCoordinates.lat]
+    );
+    if (!evaluation?.nearestCoordinate) return;
+
+    const roundNumber = Number(result.roundNumber);
+    const guessLatLng = [result.guessCoordinates.lat, result.guessCoordinates.lng];
+    const targetLatLng = coordinatesToLatLng(evaluation.nearestCoordinate);
+    const targetIcon = L.divIcon({
+      className: "",
+      html: `<div class="exam-overview-marker exam-overview-target" title="Aufgabe ${roundNumber}: nächster Zielpunkt">${roundNumber}</div>`,
+      iconSize: [32, 32],
+      iconAnchor: [16, 16]
+    });
+    const guessIcon = L.divIcon({
+      className: "",
+      html: `<div class="exam-overview-marker exam-overview-guess" title="Aufgabe ${roundNumber}: dein Tipp">${roundNumber}</div>`,
+      iconSize: [24, 24],
+      iconAnchor: [12, 12]
+    });
+
+    L.marker(targetLatLng, {
+      icon: targetIcon,
+      interactive: false,
+      keyboard: false,
+      alt: `Aufgabe ${roundNumber}: nächster Zielpunkt`
+    }).addTo(solutionLayers);
+    L.polyline([guessLatLng, targetLatLng], {
+      color: MAP_STYLE.connection,
+      weight: 2.5,
+      opacity: 0.76,
+      dashArray: "6 7",
+      interactive: false
+    }).addTo(answerLayers);
+    L.marker(guessLatLng, {
+      icon: guessIcon,
+      interactive: false,
+      keyboard: false,
+      alt: `Aufgabe ${roundNumber}: eigener Tipp`
+    }).addTo(answerLayers);
+    overviewPoints.push(guessLatLng, targetLatLng);
+    answeredCount += 1;
+  });
+
+  const overviewBounds = L.latLngBounds(overviewPoints);
+  if (overviewBounds.isValid()) {
+    map.fitBounds(overviewBounds.pad(0.12), {
+      animate: true,
+      maxZoom: 14,
+      padding: [36, 36]
+    });
+  } else {
+    mapView.resetViewport(false);
+  }
+  els.returnToExamResultsButton.classList.add("hidden");
+  els.mapHint.textContent = answeredCount > 0
+    ? `Prüfungsübersicht: Blau = dein Tipp · Rot = Zielpunkt · gleiche Nummer = gleiche Aufgabe (${answeredCount} beantwortet)`
+    : "Prüfungsübersicht: Es wurde keine Aufgabe beantwortet.";
+  return answeredCount;
+}
+
+function showExamRoundOnMap(roundNumber) {
+  if (gameState.config.mode !== "exam" || gameState.status !== GAME_STATUS.FINISHED) return;
+  const result = gameState.results.find(candidate => candidate.roundNumber === roundNumber);
+  const target = getExamTargetForResult(result);
+  if (!target) return;
 
   mapView.clearRound();
   if (result.guessCoordinates) {
@@ -1432,10 +1525,7 @@ function showExamRoundOnMap(roundNumber) {
 }
 
 function returnToExamResults() {
-  mapView.clearRound();
-  mapView.resetViewport();
-  els.returnToExamResultsButton.classList.add("hidden");
-  els.mapHint.textContent = "Wähle eine Aufgabe aus, um sie auf der Karte nachzusehen.";
+  renderExamAnswerOverview();
   if (typeof els.examResultsCard.scrollIntoView === "function") {
     els.examResultsCard.scrollIntoView({ behavior: "smooth", block: "start" });
   }
@@ -1654,6 +1744,8 @@ addFireStations();
 map.on("click", event => submitGuess(event.latlng));
 els.mainButton.addEventListener("click", handleMainButton);
 els.modeSelect.addEventListener("change", handleModeChange);
+els.secondsPerRoundSelect.addEventListener("change", refreshConfigurationAfterSettingsChange);
+els.totalRoundsSelect.addEventListener("change", refreshConfigurationAfterSettingsChange);
 els.contentSelectionSelect.addEventListener("change", handleContentSelectionChange);
 els.showTargetCategoryCheckbox.addEventListener("change", handleCategoryVisibilityChange);
 els.poiCategoryOptions.addEventListener("change", handlePoiCategoryChange);
