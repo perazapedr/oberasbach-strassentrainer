@@ -44,6 +44,10 @@
       quizEligible: rawPoi.quizEligible !== false,
       source: rawPoi.source || null,
       sourceUrl: rawPoi.sourceUrl || null,
+      geometryScope: rawPoi.geometryScope || "point",
+      geometrySource: rawPoi.geometrySource || null,
+      geometrySourceUrl: rawPoi.geometrySourceUrl || null,
+      geometryCheckedAt: rawPoi.geometryCheckedAt || null,
       needsReview: Boolean(rawPoi.needsReview),
       reviewNote: rawPoi.reviewNote || null
     }));
@@ -56,6 +60,38 @@
       && Number.isFinite(Number(coordinate[1]));
   }
 
+  function coordinatesAreEqual(first, second) {
+    return isFiniteCoordinate(first)
+      && isFiniteCoordinate(second)
+      && Number(first[0]) === Number(second[0])
+      && Number(first[1]) === Number(second[1]);
+  }
+
+  function isValidLinearRing(ring) {
+    if (!Array.isArray(ring) || ring.length < 4 || !ring.every(isFiniteCoordinate)) {
+      return false;
+    }
+    if (!coordinatesAreEqual(ring[0], ring[ring.length - 1])) return false;
+
+    const uniqueCoordinates = new Set(
+      ring.slice(0, -1).map(coordinate => `${Number(coordinate[0])},${Number(coordinate[1])}`)
+    );
+    if (uniqueCoordinates.size < 3) return false;
+
+    let doubledArea = 0;
+    for (let index = 0; index < ring.length - 1; index += 1) {
+      doubledArea += Number(ring[index][0]) * Number(ring[index + 1][1])
+        - Number(ring[index + 1][0]) * Number(ring[index][1]);
+    }
+    return Math.abs(doubledArea) > Number.EPSILON;
+  }
+
+  function isValidPolygonCoordinates(coordinates) {
+    return Array.isArray(coordinates)
+      && coordinates.length > 0
+      && coordinates.every(isValidLinearRing);
+  }
+
   function isValidTargetGeometry(target, geometryApi) {
     if (!target?.geometry) return false;
     if (target.targetType === TARGET_TYPES.STREET) {
@@ -65,13 +101,12 @@
       return isFiniteCoordinate(target.geometry.coordinates);
     }
     if (target.geometry.type === "Polygon") {
-      return Array.isArray(target.geometry.coordinates)
-        && target.geometry.coordinates.some(ring => Array.isArray(ring) && ring.length >= 3);
+      return isValidPolygonCoordinates(target.geometry.coordinates);
     }
     if (target.geometry.type === "MultiPolygon") {
       return Array.isArray(target.geometry.coordinates)
-        && target.geometry.coordinates.some(polygon => Array.isArray(polygon)
-          && polygon.some(ring => Array.isArray(ring) && ring.length >= 3));
+        && target.geometry.coordinates.length > 0
+        && target.geometry.coordinates.every(isValidPolygonCoordinates);
     }
     return false;
   }
@@ -144,6 +179,7 @@
     TARGET_TYPES,
     prepareStreetTargets,
     preparePoiTargets,
+    isValidLinearRing,
     isValidTargetGeometry,
     haversineDistanceMeters,
     evaluateTargetDistance,

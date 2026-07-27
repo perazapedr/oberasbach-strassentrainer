@@ -140,8 +140,36 @@ const poiCategories = [
   { id: "public-facility", label: "Öffentliche Einrichtung" }
 ];
 const rawPois = [
-  { id: "poi-school-test-1", displayName: "Testschule 1", category: "school", latitude: 49.425, longitude: 10.955 },
-  { id: "poi-school-test-2", displayName: "Testschule 2", category: "school", latitude: 49.426, longitude: 10.956 },
+  {
+    id: "poi-school-test-1",
+    displayName: "Testschule 1",
+    category: "school",
+    latitude: 49.425,
+    longitude: 10.955,
+    geometryScope: "site",
+    geometry: {
+      type: "Polygon",
+      coordinates: [[
+        [10.9545, 49.4245], [10.9555, 49.4245], [10.9555, 49.4255],
+        [10.9545, 49.4255], [10.9545, 49.4245]
+      ]]
+    }
+  },
+  {
+    id: "poi-school-test-2",
+    displayName: "Testschule 2",
+    category: "school",
+    latitude: 49.426,
+    longitude: 10.956,
+    geometryScope: "site",
+    geometry: {
+      type: "Polygon",
+      coordinates: [[
+        [10.9555, 49.4255], [10.9565, 49.4255], [10.9565, 49.4265],
+        [10.9555, 49.4265], [10.9555, 49.4255]
+      ]]
+    }
+  },
   { id: "poi-public-test", displayName: "Testrathaus", category: "public-facility", latitude: 49.427, longitude: 10.957 }
 ];
 const preparedStreets = geometryApi.prepareStreetRecords(rawStreets);
@@ -190,6 +218,14 @@ const L = {
 const turf = {
   point: coordinates => ({ geometry: { coordinates } }),
   lineString: coordinates => ({ geometry: { coordinates } }),
+  booleanPointInPolygon: point => {
+    const [longitude, latitude] = point.geometry.coordinates;
+    const insideFirstSchool = longitude >= 10.9545 && longitude <= 10.9555
+      && latitude >= 49.4245 && latitude <= 49.4255;
+    const insideSecondSchool = longitude >= 10.9555 && longitude <= 10.9565
+      && latitude >= 49.4255 && latitude <= 49.4265;
+    return insideFirstSchool || insideSecondSchool;
+  },
   pointToLineDistance: () => 125,
   nearestPointOnLine: line => ({ geometry: { coordinates: line.geometry.coordinates[0] } })
 };
@@ -540,14 +576,22 @@ vm.runInNewContext(source, context, { filename: "app.js" });
   assert.equal(state.currentRound.target.targetType, "poi");
   assert.equal(elements.targetCategoryLabel.classList.contains("hidden"), true,
     "Die POI-Kategorie muss für schwierigere Alarme ausblendbar sein");
-  mapObject.handlers.click({ latlng: { lat: 49.4251, lng: 10.9551 } });
+  const selectedPoi = rawPois.find(poi => poi.id === state.currentRound.target.id);
+  mapObject.handlers.click({
+    latlng: {
+      lat: selectedPoi.latitude,
+      lng: selectedPoi.longitude
+    }
+  });
   state = debug.getGameState();
   assert.equal(state.results[0].targetType, "poi");
   assert.equal(debug.getStatistics().targetTypes.poi.roundsEvaluated, 1,
     "Die dauerhafte Statistik muss POIs separat aggregieren");
-  assert.equal(context.__appTest.solutionLayers.layers[0].kind, "marker");
-  assert.equal(context.__appTest.answerLayers.layers.length, 2,
-    "POI-Auflösung zeigt Tipp und Verbindung, aber keinen doppelten Zielpunkt");
+  assert.equal(state.results[0].distanceMeters, 0,
+    "Ein Tipp innerhalb einer POI-Fläche muss als exakter Treffer zählen");
+  assert.equal(context.__appTest.solutionLayers.layers[0].kind, "polygon");
+  assert.equal(context.__appTest.answerLayers.layers.length, 3,
+    "Flächenauflösung zeigt Tipp, nächsten Flächenpunkt und Verbindung");
   const schoolCategoryCheckbox = new Element();
   schoolCategoryCheckbox.dataset.poiCategory = "school";
   schoolCategoryCheckbox.checked = false;
@@ -562,6 +606,20 @@ vm.runInNewContext(source, context, { filename: "app.js" });
   assert.equal(debug.getGameState().currentRound.target.targetType, "street",
     "Die gemischte Auswahl gleicht nach einem POI zunächst den Straßentyp aus");
 
+  schoolCategoryCheckbox.checked = true;
+  elements.poiCategoryOptions.onchange({ target: schoolCategoryCheckbox });
+  elements.modeSelect.value = "timed";
+  elements.modeSelect.onchange();
+  elements.contentSelectionSelect.value = "pois";
+  elements.contentSelectionSelect.onchange();
+  elements.mainButton.onclick();
+  await nextTask();
+  assert.equal(debug.getGameState().currentRound.target.geometry.type, "Polygon");
+  deadlineTimerHarness.expire();
+  assert.equal(elements.mapHint.textContent, "Rote Fläche: richtiges Gelände");
+  assert.ok(elements.resultMessage.textContent.includes("rote Zielfläche"),
+    "Die Timeout-Auflösung muss eine Geländegeometrie als Fläche benennen");
+
   console.log("Integrationstests für Freien Modus, Zeitmodus und Prüfungsmodus erfolgreich:");
   console.log("- Initialisierung, Alarm, Tipp, Auswertung und nächste Runde");
   console.log("- vollständiges Rundenergebnis im zentralen gameState");
@@ -574,6 +632,7 @@ vm.runInNewContext(source, context, { filename: "app.js" });
   console.log("- spielerische Auszeichnung aus dem endgültigen Prüfungsergebnis");
   console.log("- getrennte Statistik sowie Warnungen bei Reload, Zurück und Abbruch");
   console.log("- lokale POIs, ausblendbare Kategorie, gespeicherte Auswahl und gemischte Balance");
+  console.log("- POI-Flächen mit Innentreffer, Polygonlayer und geometrieabhängigem Timeout-Text");
 })().catch(error => {
   console.error(error);
   process.exitCode = 1;

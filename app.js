@@ -736,13 +736,18 @@ function completeExamRound() {
 function renderRoundResult(result) {
   const hasDistance = Number.isFinite(result.distanceMeters);
   const roundedDistance = hasDistance ? Math.round(result.distanceMeters) : null;
+  const targetGeometryType = gameState.currentRound?.target?.geometry?.type;
+  const isPoiArea = result.targetType === targetApi.TARGET_TYPES.POI
+    && (targetGeometryType === "Polygon" || targetGeometryType === "MultiPolygon");
   els.distanceValue.textContent = hasDistance ? formatDistance(roundedDistance) : "–";
   els.scoreValue.textContent = result.points.toLocaleString("de-DE");
   els.resultTitle.textContent = result.timedOut
     ? "Zeit abgelaufen"
     : getResultTitle(roundedDistance, result.targetType);
   const targetDescription = result.targetType === targetApi.TARGET_TYPES.POI
-    ? "Der rote Zielpunkt zeigt den richtigen Ort."
+    ? (isPoiArea
+      ? "Die rote Zielfläche zeigt das richtige Gelände."
+      : "Der rote Zielpunkt zeigt den richtigen Ort.")
     : "Die rote Linie zeigt die richtige Straße.";
   els.resultMessage.textContent = result.timedOut
     ? `Die Runde wurde ohne Tipp und mit 0 Punkten gespeichert. ${targetDescription}`
@@ -757,7 +762,9 @@ function renderRoundResult(result) {
     : (gameState.config.mode === "timed" ? "Nächste Aufgabe" : "Nächster Alarm");
   els.mapHint.textContent = result.timedOut
     ? (result.targetType === targetApi.TARGET_TYPES.POI
-      ? "Roter Punkt: richtiger Einsatzort"
+      ? (isPoiArea
+        ? "Rote Fläche: richtiges Gelände"
+        : "Roter Punkt: richtiger Einsatzort")
       : "Breite rote Linie: richtige Zielstraße")
     : "Rot: richtiges Ziel · Blau: dein Tipp · gestrichelt: kürzeste Verbindung";
   setStatus("Auswertung abgeschlossen.", "ready");

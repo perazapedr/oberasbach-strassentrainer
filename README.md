@@ -12,7 +12,7 @@ Eine statische Web-App nach dem GeoGuessr-Prinzip für das Feuerwehrtraining in 
 
 Im gemischten Modus werden beide Zieltypen möglichst abwechselnd ausgewählt. Ein Ziel wird nicht unmittelbar zweimal hintereinander angezeigt; innerhalb einer laufenden Auswahl werden zunächst noch nicht verwendete Ziele bevorzugt. Die Kategorien der POIs lassen sich einzeln ein- und ausschalten. Die Inhaltsauswahl, Kategorien und die Einstellung „Kategorie beim Alarm anzeigen“ werden unter `oberasbach-strassentrainer-inhalt-v1` in `localStorage` gespeichert und beim nächsten Besuch wiederhergestellt.
 
-Die POIs liegen vollständig in `data/oberasbach-pois.js`. Während einer Spielrunde wird dafür **kein externer POI-Dienst** aufgerufen. Der Datenstand trägt je Eintrag ein Prüfdatum, eine Quelle und gegebenenfalls `needsReview: true` samt `reviewNote`. Gerätehäuser bleiben als Orientierung auf der Karte sichtbar, besitzen in der POI-Datei aber `quizEligible: false` und werden deshalb nie automatisch zur Aufgabe.
+Die POIs liegen vollständig in `data/oberasbach-pois.js`. Während einer Spielrunde wird dafür **kein externer POI-Dienst** aufgerufen. Der Datenstand trägt je Eintrag ein Prüfdatum, eine Quelle und gegebenenfalls `needsReview: true` samt `reviewNote`. Neun eindeutig abgegrenzte Schul-, Kita- und Sportgelände besitzen zusätzlich eine lokale OSM-Polygonfläche mit exakter Way-Quelle und Prüfdatum. Gerätehäuser bleiben als Orientierung auf der Karte sichtbar, besitzen in der POI-Datei aber `quizEligible: false` und werden deshalb nie automatisch zur Aufgabe.
 
 Unterstützte POI-Kategorien sind Schule, Kindertagesstätte, Senioren-/Pflegeeinrichtung, Tankstelle, Supermarkt/Einkaufsmarkt, Gesundheit, öffentliche Einrichtung, Sport/Freizeit, Gastronomie/Beherbergung, Unternehmen und sonstiger einsatzrelevanter Ort.
 
@@ -230,7 +230,7 @@ Dabei gelten folgende Regeln:
 5. Für einen vorübergehend geschlossenen, doppelten, außerhalb Oberasbachs liegenden oder offensichtlich irrelevanten Eintrag werden `active: false` und `quizEligible: false` gesetzt, statt seine ID zu recyceln.
 6. Ein Orientierungspunkt wie ein Gerätehaus bleibt `active: true`, erhält aber `quizEligible: false`.
 
-Große Einrichtungen können später statt des Standardpunkts eine echte Fläche erhalten. Das Datenmodell akzeptiert bereits GeoJSON `Polygon` und `MultiPolygon`:
+Große Einrichtungen können statt des Standardpunkts eine echte Geländegrenze als GeoJSON `Polygon` oder `MultiPolygon` erhalten:
 
 ```javascript
 geometry: {
@@ -243,6 +243,8 @@ geometry: {
   ]]
 }
 ```
+
+Eine Geländegeometrie erhält zusätzlich `geometryScope: "site"`, `geometrySource`, eine exakte `geometrySourceUrl` zum OSM-Way beziehungsweise zur OSM-Relation und `geometryCheckedAt`. Reine Gebäudeumrisse werden nicht ersatzweise als Einrichtungsgelände verwendet. Liegt keine eindeutig zuordenbare Geländegrenze vor, bleibt der POI ein Punkt.
 
 Nach jeder Datenänderung `node tests/targets-tests.js` ausführen. Der Test prüft unter anderem eindeutige IDs, bekannte Kategorien, Pflichtfelder, Koordinaten, Prüfhinweise und den Ausschluss inaktiver Einträge sowie der Gerätehäuser.
 
@@ -276,7 +278,7 @@ Die Tests decken Straßen- und POI-Geometrien, den lokalen Datenbestand, alle En
 
 1. Im Freien Modus „Nur Orte und Einrichtungen“ wählen, mehrere Kategorien einzeln deaktivieren und einen Alarm starten. Es dürfen nur aktive, quizberechtigte Einträge aus den verbleibenden Kategorien erscheinen.
 2. „Kategorie beim Alarm anzeigen“ ausschalten. Beim nächsten und beim aktuell laufenden Alarm darf die Kategorie nicht mehr sichtbar sein; der Zielname bleibt erhalten.
-3. Möglichst genau auf eine bekannte Einrichtung tippen. Der blaue Tipp, der rote Zielpunkt und die gestrichelte kürzeste Verbindung müssen sichtbar und klar unterscheidbar sein.
+3. Möglichst genau auf eine bekannte Einrichtung tippen. Der blaue Tipp, der rote Zielpunkt beziehungsweise die rote Zielfläche und die gestrichelte kürzeste Verbindung müssen sichtbar und klar unterscheidbar sein.
 4. „Straßen und Orte gemischt“ wählen und mindestens zehn Runden spielen. Straßen und POIs sollen annähernd gleich oft vorkommen und dasselbe Ziel darf nicht unmittelbar erneut erscheinen.
 5. Die Seite neu laden. Inhaltswahl, Kategorien und Kategorieanzeige müssen aus `localStorage` wiederhergestellt werden.
 6. Ein Zeittraining und eine Prüfung mit gemischtem Inhalt abschließen. Die Abschlussstatistik muss Straßen und Orte getrennt ausweisen; in der Prüfung darf die POI-Lösung weiterhin erst am Ende sichtbar werden.
