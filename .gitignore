@@ -1,0 +1,8 @@
+# Lokale Konfiguration und geheime Schlüssel
+config.local.js
+
+# Betriebssystem & Editoren
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

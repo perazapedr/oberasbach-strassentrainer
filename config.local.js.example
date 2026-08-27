@@ -1,0 +1,8 @@
+// Lokale Konfiguration – wird NICHT ins Git-Repository hochgeladen.
+// Kopiere diese Datei als config.local.js und trage deinen CARTO Basemaps API-Key ein.
+// Den kostenlosen Key erhältst du unter: https://carto.com/basemaps/apikey
+
+window.STRASSENTRAINER_CONFIG = {
+  cartoApiKey: "" // Hier den CARTO Basemaps API-Key eintragen
+};
+

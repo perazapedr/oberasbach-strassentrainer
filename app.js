@@ -10,9 +10,12 @@ const {
   createGameEngine
 } = window.StrassentrainerEngine;
 
+const cartoApiKey = (window.STRASSENTRAINER_CONFIG && window.STRASSENTRAINER_CONFIG.cartoApiKey) || "";
+const cartoKeyQuery = cartoApiKey ? `?key=${encodeURIComponent(cartoApiKey)}` : "";
+
 const MAP_STYLE = {
-  tileUrl: "https://{s}.basemaps.cartocdn.com/light_nolabels/{z}/{x}/{y}{r}.png?key=cb1_2by7_1_7e6ab2de1ebd6f23a017c794",
-  roadContrastUrl: "https://{s}.basemaps.cartocdn.com/rastertiles/voyager_nolabels/{z}/{x}/{y}{r}.png?key=cb1_2by7_1_7e6ab2de1ebd6f23a017c794",
+  tileUrl: `https://{s}.basemaps.cartocdn.com/light_nolabels/{z}/{x}/{y}{r}.png${cartoKeyQuery}`,
+  roadContrastUrl: `https://{s}.basemaps.cartocdn.com/rastertiles/voyager_nolabels/{z}/{x}/{y}{r}.png${cartoKeyQuery}`,
   roadContrastMinZoom: 15,
   roadContrastOpacity: 0.34,
   solution: "#d71936",
