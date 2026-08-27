@@ -1789,3 +1789,9 @@ window.addEventListener("keydown", event => {
 });
 
 initializeApplication();
+
+if (window.StrassentrainerCityManager) {
+  void window.StrassentrainerCityManager.init({
+    canChangeCity: () => ![GAME_STATUS.ACTIVE, GAME_STATUS.PREPARING].includes(gameState.status)
+  });
+}

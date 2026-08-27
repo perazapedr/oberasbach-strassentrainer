@@ -25,9 +25,34 @@
         </div>
       </div>
 
-      <div class="scoreboard" aria-label="Spielstand">
-        <div><span id="roundValue">0</span><small>Runden</small></div>
-        <div id="scorePointsPanel"><span id="totalScoreValue">0</span><small>Punkte</small></div>
+      <div class="topbar-tools">
+        <div id="citySelector" class="city-selector">
+          <button
+            id="citySelectorButton"
+            class="city-selector-button"
+            type="button"
+            aria-haspopup="menu"
+            aria-expanded="false"
+            aria-controls="cityMenu"
+          >
+            <span aria-hidden="true">📍</span>
+            <span id="activeCityName" class="city-selector-name">Keine Stadt ausgewählt</span>
+            <span aria-hidden="true">▾</span>
+          </button>
+          <div id="cityMenu" class="city-menu hidden" role="menu" aria-label="Installierte Städte">
+            <div id="installedCityList" class="installed-city-list"></div>
+            <div class="city-menu-separator" aria-hidden="true"></div>
+            <button id="addCityButton" class="city-menu-add" type="button" role="menuitem">
+              <span aria-hidden="true">＋</span> Neue Stadt hinzufügen
+            </button>
+          </div>
+          <p id="cityManagerHeaderStatus" class="city-manager-header-status" role="status" aria-live="polite"></p>
+        </div>
+
+        <div class="scoreboard" aria-label="Spielstand">
+          <div><span id="roundValue">0</span><small>Runden</small></div>
+          <div id="scorePointsPanel"><span id="totalScoreValue">0</span><small>Punkte</small></div>
+        </div>
       </div>
     </header>
 
@@ -264,6 +289,127 @@
     </section>
   </main>
 
+  <div id="cityManagerModalOverlay" class="city-modal-overlay hidden" aria-hidden="true">
+    <section
+      id="cityManagerDialog"
+      class="city-manager-dialog"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="cityManagerTitle"
+    >
+      <header class="city-dialog-header">
+        <div>
+          <p class="eyebrow city-dialog-eyebrow">Stadtmanager</p>
+          <h2 id="cityManagerTitle">Neue Stadt hinzufügen</h2>
+        </div>
+        <button id="closeCityManagerButton" class="city-dialog-close" type="button" aria-label="Dialog schließen">×</button>
+      </header>
+
+      <div class="city-dialog-body">
+        <p class="city-transition-note">
+          Installierte Städte können bereits verwaltet werden. Die Karte und das laufende Training verwenden bis Phase 6 weiterhin die kuratierten Oberasbach-Daten.
+        </p>
+
+        <div id="cityManagerAlert" class="city-manager-alert hidden" role="alert"></div>
+
+        <section id="citySearchPanel" class="city-search-panel">
+          <form id="citySearchForm" class="city-search-form" novalidate>
+            <div class="field-group city-search-field">
+              <label for="citySearchInput">Stadt oder Gemeinde</label>
+              <div class="city-search-row">
+                <input id="citySearchInput" name="municipality" type="search" autocomplete="off" />
+                <button id="citySearchButton" class="city-inline-primary" type="submit">Suchen</button>
+              </div>
+            </div>
+          </form>
+          <p id="citySearchStatus" class="city-search-status" role="status" aria-live="polite"></p>
+          <div id="citySearchResults" class="city-search-results" role="listbox" aria-label="Gefundene Gemeinden"></div>
+
+          <section id="selectedMunicipalityPanel" class="selected-municipality-panel hidden" aria-live="polite">
+            <span class="city-selection-label">Ausgewählte Gemeinde</span>
+            <strong id="selectedMunicipalityName"></strong>
+            <span id="selectedMunicipalityContext"></span>
+            <button id="municipalityActionButton" class="primary-button city-dialog-primary" type="button">
+              Stadt herunterladen
+            </button>
+          </section>
+        </section>
+
+        <section id="cityDownloadPanel" class="city-download-panel hidden" aria-live="polite">
+          <h3 id="cityDownloadTitle">Stadtdaten werden vorbereitet</h3>
+          <div
+            id="cityDownloadProgress"
+            class="city-progress"
+            role="progressbar"
+            aria-valuemin="0"
+            aria-valuemax="100"
+            aria-valuenow="0"
+            aria-labelledby="cityDownloadTitle"
+            aria-describedby="cityProgressMessage"
+          >
+            <span id="cityProgressBar"></span>
+          </div>
+          <p id="cityProgressMessage" class="city-progress-message">Download wird vorbereitet …</p>
+          <button id="cancelCityDownloadButton" class="secondary-button city-dialog-secondary" type="button">Download abbrechen</button>
+        </section>
+
+        <section id="cityValidationPanel" class="city-validation-panel hidden" aria-live="polite">
+          <div id="cityValidationOutcome" class="city-validation-outcome"></div>
+          <div class="city-preview-counts">
+            <div><strong id="previewStreetCount">0</strong><span>Straßen</span></div>
+            <div><strong id="previewPoiCount">0</strong><span>Einrichtungen</span></div>
+            <div><strong id="previewFireStationCount">0</strong><span>Feuerwehren</span></div>
+          </div>
+          <div id="previewCategoryCounts" class="city-category-counts"></div>
+          <div id="cityWarningSummary" class="city-warning-summary hidden"></div>
+          <button id="toggleWarningDetailsButton" class="city-details-toggle hidden" type="button" aria-expanded="false" aria-controls="cityWarningDetails">
+            Details anzeigen
+          </button>
+          <div id="cityWarningDetails" class="city-warning-details hidden"></div>
+          <div class="city-dialog-actions">
+            <button id="cancelValidationButton" class="secondary-button city-dialog-secondary" type="button">Abbrechen</button>
+            <button id="saveCityButton" class="primary-button city-dialog-primary" type="button">Stadt speichern</button>
+          </div>
+        </section>
+
+        <section id="cityCompletedPanel" class="city-completed-panel hidden" aria-live="polite">
+          <div class="city-completed-symbol" aria-hidden="true">✓</div>
+          <h3>Stadt installiert</h3>
+          <p id="cityCompletedMessage"></p>
+          <button id="closeCompletedButton" class="primary-button city-dialog-primary" type="button">Fertig</button>
+        </section>
+      </div>
+
+      <p id="cityManagerLiveRegion" class="visually-hidden" role="status" aria-live="polite"></p>
+    </section>
+  </div>
+
+  <div id="deleteCityModalOverlay" class="city-modal-overlay hidden" aria-hidden="true">
+    <section
+      id="deleteCityDialog"
+      class="city-manager-dialog city-delete-dialog"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="deleteCityTitle"
+    >
+      <header class="city-dialog-header">
+        <div>
+          <p class="eyebrow city-dialog-eyebrow">Lokale Daten</p>
+          <h2 id="deleteCityTitle">Stadt löschen?</h2>
+        </div>
+      </header>
+      <div class="city-dialog-body">
+        <p id="deleteCityMessage"></p>
+        <p>Die lokal gespeicherten Straßen- und POI-Daten werden entfernt. Bestehende Statistikdaten bleiben unverändert.</p>
+        <p id="deleteCityStatus" class="city-search-status" role="status" aria-live="polite"></p>
+        <div class="city-dialog-actions">
+          <button id="cancelDeleteCityButton" class="secondary-button city-dialog-secondary" type="button">Abbrechen</button>
+          <button id="confirmDeleteCityButton" class="primary-button city-dialog-primary city-danger-button" type="button">Stadt löschen</button>
+        </div>
+      </div>
+    </section>
+  </div>
+
   <noscript>Diese Anwendung benötigt JavaScript.</noscript>
 
   <script
@@ -280,6 +426,7 @@
   <script src="city-storage.js"></script>
   <script src="osm-service.js"></script>
   <script src="city-data-validator.js"></script>
+  <script src="city-manager-ui.js"></script>
   <script src="data/oberasbach-streets.js"></script>
   <script src="data/oberasbach-pois.js"></script>
   <script src="config.local.js" onerror="window.STRASSENTRAINER_CONFIG = window.STRASSENTRAINER_CONFIG || {}"></script>
