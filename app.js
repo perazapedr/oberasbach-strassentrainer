@@ -11,8 +11,8 @@ const {
 } = window.StrassentrainerEngine;
 
 const MAP_STYLE = {
-  tileUrl: "https://{s}.basemaps.cartocdn.com/light_nolabels/{z}/{x}/{y}{r}.png",
-  roadContrastUrl: "https://{s}.basemaps.cartocdn.com/rastertiles/voyager_nolabels/{z}/{x}/{y}{r}.png",
+  tileUrl: "https://{s}.basemaps.cartocdn.com/light_nolabels/{z}/{x}/{y}{r}.png?key=cb1_2by7_1_7e6ab2de1ebd6f23a017c794",
+  roadContrastUrl: "https://{s}.basemaps.cartocdn.com/rastertiles/voyager_nolabels/{z}/{x}/{y}{r}.png?key=cb1_2by7_1_7e6ab2de1ebd6f23a017c794",
   roadContrastMinZoom: 15,
   roadContrastOpacity: 0.34,
   solution: "#d71936",
