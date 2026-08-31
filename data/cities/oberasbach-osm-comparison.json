@@ -1,0 +1,514 @@
+{
+  "schemaVersion": 1,
+  "cityId": "osm-relation-1016396",
+  "snapshotDate": "2026-08-28",
+  "policy": "curated-data-wins; this report never mutates the bundled package",
+  "summary": {
+    "streets": {
+      "matched": 258,
+      "onlyInOsm": 4,
+      "onlyInCurated": 13,
+      "notCompared": 0,
+      "differences": 0,
+      "ambiguous": 0
+    },
+    "pois": {
+      "matched": 21,
+      "onlyInOsm": 4,
+      "onlyInCurated": 4,
+      "notCompared": 35,
+      "differences": 22,
+      "ambiguous": 0
+    }
+  },
+  "streets": {
+    "matched": 258,
+    "onlyInCurated": [
+      "Altvatergebirgsweg",
+      "Am Rathaus",
+      "Entensteig",
+      "Friedhofsweg",
+      "Gräbelsweg",
+      "Häsigweg",
+      "Heinrich-Heine-Weg",
+      "Jupiterweg",
+      "Käthe-Kollwitz-Weg",
+      "Löheweg",
+      "Markusweg",
+      "Oberer Steig",
+      "Willy-Brandt-Platz"
+    ],
+    "onlyInOsm": [
+      "Am Steinacker",
+      "Lindenstraße",
+      "Oberasbacher Weg",
+      "Ulmenstraße"
+    ],
+    "nameDifferences": [],
+    "ambiguous": []
+  },
+  "pois": {
+    "matched": 21,
+    "onlyInCurated": [
+      {
+        "id": "poi-childcare-awo-kindergarten",
+        "name": "AWO-Kindergarten Oberasbach",
+        "category": "childcare"
+      },
+      {
+        "id": "poi-childcare-champini",
+        "name": "Champini Oberasbach Sport-Kita",
+        "category": "childcare"
+      },
+      {
+        "id": "poi-childcare-pusteblume",
+        "name": "Johanniter-Kinderkrippe Pusteblume",
+        "category": "childcare"
+      },
+      {
+        "id": "poi-market-e-center",
+        "name": "E center Schuler",
+        "category": "supermarket"
+      }
+    ],
+    "onlyInOsm": [
+      {
+        "id": "osm-relation-1016396:poi:node-9267200519",
+        "name": "Weltladen",
+        "category": "supermarket",
+        "osmType": "node",
+        "osmId": 9267200519
+      },
+      {
+        "id": "osm-relation-1016396:poi:way-391891535",
+        "name": "Jugendhaus Oberasbach",
+        "category": "kindergarten",
+        "osmType": "way",
+        "osmId": 391891535
+      },
+      {
+        "id": "osm-relation-1016396:poi:way-393152608",
+        "name": "Storchennest",
+        "category": "kindergarten",
+        "osmType": "way",
+        "osmId": 393152608
+      },
+      {
+        "id": "osm-relation-1016396:poi:way-851993892",
+        "name": "Kindergarten St. Stephanus",
+        "category": "kindergarten",
+        "osmType": "way",
+        "osmId": 851993892
+      }
+    ],
+    "notCompared": 35,
+    "categories": {
+      "compared": [
+        "childcare",
+        "other-relevant / Feuerwehrgerätehaus",
+        "school",
+        "supermarket"
+      ],
+      "notCompared": [
+        "company",
+        "fuel",
+        "health",
+        "hospitality",
+        "other-relevant",
+        "public-facility",
+        "senior-care",
+        "sports-leisure"
+      ]
+    },
+    "nameDifferences": [
+      {
+        "osm": {
+          "id": "osm-relation-1016396:poi:way-391891520",
+          "name": "\"Hort an der Schule\"",
+          "category": "kindergarten",
+          "osmType": "way",
+          "osmId": 391891520
+        },
+        "curated": {
+          "id": "poi-childcare-hort-asbachgrund",
+          "name": "Städtischer Kinderhort am Asbachgrund",
+          "category": "childcare"
+        },
+        "distanceMeters": 4.3,
+        "osmName": "\"Hort an der Schule\"",
+        "curatedName": "Städtischer Kinderhort am Asbachgrund"
+      },
+      {
+        "osm": {
+          "id": "osm-relation-1016396:poi:way-1058298778",
+          "name": "Kindergarten Regenbogen",
+          "category": "kindergarten",
+          "osmType": "way",
+          "osmId": 1058298778
+        },
+        "curated": {
+          "id": "poi-childcare-regenbogen",
+          "name": "Evangelischer Kindergarten Regenbogen",
+          "category": "childcare"
+        },
+        "distanceMeters": 7.4,
+        "osmName": "Kindergarten Regenbogen",
+        "curatedName": "Evangelischer Kindergarten Regenbogen"
+      },
+      {
+        "osm": {
+          "id": "osm-relation-1016396:poi:way-391888962",
+          "name": "Kindergarten St. Johannes",
+          "category": "kindergarten",
+          "osmType": "way",
+          "osmId": 391888962
+        },
+        "curated": {
+          "id": "poi-childcare-st-johannes",
+          "name": "St. Johannes – Katholische Krippe und Kindergarten",
+          "category": "childcare"
+        },
+        "distanceMeters": 11.4,
+        "osmName": "Kindergarten St. Johannes",
+        "curatedName": "St. Johannes – Katholische Krippe und Kindergarten"
+      },
+      {
+        "osm": {
+          "id": "osm-relation-1016396:poi:way-199260972",
+          "name": "Kindergarten St. Lorenz",
+          "category": "kindergarten",
+          "osmType": "way",
+          "osmId": 199260972
+        },
+        "curated": {
+          "id": "poi-childcare-st-lorenz",
+          "name": "Evangelischer Kindergarten St. Lorenz",
+          "category": "childcare"
+        },
+        "distanceMeters": 1.5,
+        "osmName": "Kindergarten St. Lorenz",
+        "curatedName": "Evangelischer Kindergarten St. Lorenz"
+      },
+      {
+        "osm": {
+          "id": "osm-relation-1016396:poi:way-317345180",
+          "name": "Kindergarten St. Markus",
+          "category": "kindergarten",
+          "osmType": "way",
+          "osmId": 317345180
+        },
+        "curated": {
+          "id": "poi-childcare-st-markus",
+          "name": "Evangelischer Kindergarten St. Markus",
+          "category": "childcare"
+        },
+        "distanceMeters": 3.6,
+        "osmName": "Kindergarten St. Markus",
+        "curatedName": "Evangelischer Kindergarten St. Markus"
+      },
+      {
+        "osm": {
+          "id": "osm-relation-1016396:poi:way-347141315",
+          "name": "Kindergarten St. Stephanus",
+          "category": "kindergarten",
+          "osmType": "way",
+          "osmId": 347141315
+        },
+        "curated": {
+          "id": "poi-childcare-st-stephanus",
+          "name": "Evangelische Kindertagesstätte St. Stephanus",
+          "category": "childcare"
+        },
+        "distanceMeters": 5.8,
+        "osmName": "Kindergarten St. Stephanus",
+        "curatedName": "Evangelische Kindertagesstätte St. Stephanus"
+      },
+      {
+        "osm": {
+          "id": "osm-relation-1016396:poi:way-199258683",
+          "name": "Storchennest",
+          "category": "kindergarten",
+          "osmType": "way",
+          "osmId": 199258683
+        },
+        "curated": {
+          "id": "poi-childcare-storchennest",
+          "name": "Städtische Kindertagesstätte Storchennest",
+          "category": "childcare"
+        },
+        "distanceMeters": 10.2,
+        "osmName": "Storchennest",
+        "curatedName": "Städtische Kindertagesstätte Storchennest"
+      },
+      {
+        "osm": {
+          "id": "osm-relation-1016396:poi:way-199262324",
+          "name": "KiGa Wilhelm-Löhe",
+          "category": "kindergarten",
+          "osmType": "way",
+          "osmId": 199262324
+        },
+        "curated": {
+          "id": "poi-childcare-wilhelm-loehe",
+          "name": "Wilhelm-Löhe-Kindergarten Oberasbach",
+          "category": "childcare"
+        },
+        "distanceMeters": 19.6,
+        "osmName": "KiGa Wilhelm-Löhe",
+        "curatedName": "Wilhelm-Löhe-Kindergarten Oberasbach"
+      },
+      {
+        "osm": {
+          "id": "osm-relation-1016396:poi:way-215426732",
+          "name": "ALDI Süd",
+          "category": "supermarket",
+          "osmType": "way",
+          "osmId": 215426732
+        },
+        "curated": {
+          "id": "poi-market-aldi",
+          "name": "ALDI SÜD Oberasbach",
+          "category": "supermarket"
+        },
+        "distanceMeters": 7.5,
+        "osmName": "ALDI Süd",
+        "curatedName": "ALDI SÜD Oberasbach"
+      },
+      {
+        "osm": {
+          "id": "osm-relation-1016396:poi:node-498799910",
+          "name": "Kaufland",
+          "category": "supermarket",
+          "osmType": "node",
+          "osmId": 498799910
+        },
+        "curated": {
+          "id": "poi-market-kaufland",
+          "name": "Kaufland Oberasbach",
+          "category": "supermarket"
+        },
+        "distanceMeters": 0,
+        "osmName": "Kaufland",
+        "curatedName": "Kaufland Oberasbach"
+      },
+      {
+        "osm": {
+          "id": "osm-relation-1016396:poi:way-284777941",
+          "name": "Lidl",
+          "category": "supermarket",
+          "osmType": "way",
+          "osmId": 284777941
+        },
+        "curated": {
+          "id": "poi-market-lidl",
+          "name": "Lidl Oberasbach",
+          "category": "supermarket"
+        },
+        "distanceMeters": 4.2,
+        "osmName": "Lidl",
+        "curatedName": "Lidl Oberasbach"
+      },
+      {
+        "osm": {
+          "id": "osm-relation-1016396:poi:node-441412977",
+          "name": "NORMA",
+          "category": "supermarket",
+          "osmType": "node",
+          "osmId": 441412977
+        },
+        "curated": {
+          "id": "poi-market-norma",
+          "name": "NORMA Zirndorf",
+          "category": "supermarket"
+        },
+        "distanceMeters": 826.5,
+        "osmName": "NORMA",
+        "curatedName": "NORMA Zirndorf"
+      },
+      {
+        "osm": {
+          "id": "osm-relation-1016396:poi:way-317341751",
+          "name": "FFW Altenberg",
+          "category": "fire_station",
+          "osmType": "way",
+          "osmId": 317341751
+        },
+        "curated": {
+          "id": "poi-orientation-fire-altenberg",
+          "name": "Freiwillige Feuerwehr Altenberg",
+          "category": "other-relevant"
+        },
+        "distanceMeters": 4,
+        "osmName": "FFW Altenberg",
+        "curatedName": "Freiwillige Feuerwehr Altenberg"
+      },
+      {
+        "osm": {
+          "id": "osm-relation-1016396:poi:way-190252898",
+          "name": "Dietrich-Bonhoeffer-Gymnasium",
+          "category": "school",
+          "osmType": "way",
+          "osmId": 190252898
+        },
+        "curated": {
+          "id": "poi-school-dbg",
+          "name": "Dietrich-Bonhoeffer-Gymnasium Oberasbach",
+          "category": "school"
+        },
+        "distanceMeters": 15.1,
+        "osmName": "Dietrich-Bonhoeffer-Gymnasium",
+        "curatedName": "Dietrich-Bonhoeffer-Gymnasium Oberasbach"
+      },
+      {
+        "osm": {
+          "id": "osm-relation-1016396:poi:way-393625780",
+          "name": "Elisabeth-Krauss-Förderschule",
+          "category": "school",
+          "osmType": "way",
+          "osmId": 393625780
+        },
+        "curated": {
+          "id": "poi-school-elisabeth-krauss",
+          "name": "Elisabeth-Krauß-Schule",
+          "category": "school"
+        },
+        "distanceMeters": 29.7,
+        "osmName": "Elisabeth-Krauss-Förderschule",
+        "curatedName": "Elisabeth-Krauß-Schule"
+      },
+      {
+        "osm": {
+          "id": "osm-relation-1016396:poi:way-22811978",
+          "name": "Grundschule Altenberg",
+          "category": "school",
+          "osmType": "way",
+          "osmId": 22811978
+        },
+        "curated": {
+          "id": "poi-school-grundschule-altenberg",
+          "name": "Grundschule Oberasbach-Altenberg",
+          "category": "school"
+        },
+        "distanceMeters": 10.4,
+        "osmName": "Grundschule Altenberg",
+        "curatedName": "Grundschule Oberasbach-Altenberg"
+      },
+      {
+        "osm": {
+          "id": "osm-relation-1016396:poi:way-391891536",
+          "name": "Pestalozzischule",
+          "category": "school",
+          "osmType": "way",
+          "osmId": 391891536
+        },
+        "curated": {
+          "id": "poi-school-pestalozzi-grundschule",
+          "name": "Pestalozzi-Grundschule Kreutles",
+          "category": "school"
+        },
+        "distanceMeters": 23.3,
+        "osmName": "Pestalozzischule",
+        "curatedName": "Pestalozzi-Grundschule Kreutles"
+      }
+    ],
+    "addressDifferences": [
+      {
+        "osm": {
+          "id": "osm-relation-1016396:poi:way-199258683",
+          "name": "Storchennest",
+          "category": "kindergarten",
+          "osmType": "way",
+          "osmId": 199258683
+        },
+        "curated": {
+          "id": "poi-childcare-storchennest",
+          "name": "Städtische Kindertagesstätte Storchennest",
+          "category": "childcare"
+        },
+        "distanceMeters": 10.2,
+        "osmAddress": "Fröbelstraße 7, 90522 Oberasbach",
+        "curatedAddress": "Fröbelstraße 9, 90522 Oberasbach"
+      },
+      {
+        "osm": {
+          "id": "osm-relation-1016396:poi:node-3957759617",
+          "name": "Kleine Weltentdecker",
+          "category": "kindergarten",
+          "osmType": "node",
+          "osmId": 3957759617
+        },
+        "curated": {
+          "id": "poi-childcare-weltentdecker",
+          "name": "Kleine Weltentdecker",
+          "category": "childcare"
+        },
+        "distanceMeters": 0,
+        "osmAddress": "Kurt-Schumacher-Straße 8, Oberasbach",
+        "curatedAddress": "Kurt-Schumacher-Straße 8, 90522 Oberasbach"
+      },
+      {
+        "osm": {
+          "id": "osm-relation-1016396:poi:node-331354000",
+          "name": "Freiwillige Feuerwehr Rehdorf",
+          "category": "fire_station",
+          "osmType": "node",
+          "osmId": 331354000
+        },
+        "curated": {
+          "id": "poi-orientation-fire-rehdorf",
+          "name": "Freiwillige Feuerwehr Rehdorf",
+          "category": "other-relevant"
+        },
+        "distanceMeters": 0,
+        "osmAddress": "Rehdorfer Straße 25, 90522 Oberasbach",
+        "curatedAddress": "Rehdorfer Straße 10, 90522 Oberasbach"
+      },
+      {
+        "osm": {
+          "id": "osm-relation-1016396:poi:way-391891536",
+          "name": "Pestalozzischule",
+          "category": "school",
+          "osmType": "way",
+          "osmId": 391891536
+        },
+        "curated": {
+          "id": "poi-school-pestalozzi-grundschule",
+          "name": "Pestalozzi-Grundschule Kreutles",
+          "category": "school"
+        },
+        "distanceMeters": 23.3,
+        "osmAddress": "Schulstraße 2",
+        "curatedAddress": "Schulstraße 2, 90522 Oberasbach"
+      }
+    ],
+    "positionDifferences": [
+      {
+        "osm": {
+          "id": "osm-relation-1016396:poi:node-441412977",
+          "name": "NORMA",
+          "category": "supermarket",
+          "osmType": "node",
+          "osmId": 441412977
+        },
+        "curated": {
+          "id": "poi-market-norma",
+          "name": "NORMA Zirndorf",
+          "category": "supermarket"
+        },
+        "distanceMeters": 826.5,
+        "type": "position-difference",
+        "osmPosition": {
+          "lat": 49.43553,
+          "lon": 10.9722337
+        },
+        "curatedPosition": {
+          "lat": 49.4350877,
+          "lon": 10.9608245
+        },
+        "thresholdMeters": 50
+      }
+    ],
+    "categoryDifferences": [],
+    "ambiguous": []
+  }
+}

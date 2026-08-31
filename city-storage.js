@@ -16,6 +16,20 @@
   const INDEX_CITY_ID = "cityId";
   const ACTIVE_CITY_STORAGE_KEY = "strassentrainer-active-city-v1";
 
+  function monotonicNow() {
+    if (typeof performance !== "undefined" && typeof performance.now === "function") {
+      return performance.now();
+    }
+    return Date.now();
+  }
+
+  function recordTiming(options, name, startedAt) {
+    const diagnostics = options && options.diagnostics;
+    if (!diagnostics || typeof diagnostics !== "object" || Array.isArray(diagnostics)) return;
+    if (!diagnostics.timingsMs) diagnostics.timingsMs = {};
+    diagnostics.timingsMs[name] = Math.round((monotonicNow() - startedAt) * 10) / 10;
+  }
+
   function requestToPromise(request) {
     return new Promise((resolve, reject) => {
       request.onsuccess = () => resolve(request.result);
@@ -201,7 +215,8 @@
       }
     }
 
-    async function saveCity(city, streets, pois) {
+    async function saveCity(city, streets, pois, options = {}) {
+      const startedAt = monotonicNow();
       validateCity(city);
       validateStreets(streets, city.id);
       validatePois(pois, city.id);
@@ -229,6 +244,7 @@
       cityStore.put(city);
 
       await txPromise;
+      recordTiming(options, "saveCityMs", startedAt);
       return city;
     }
 
@@ -289,6 +305,28 @@
       return pois || [];
     }
 
+    async function getCityData(cityId, options = {}) {
+      const startedAt = monotonicNow();
+      if (typeof cityId !== "string" || cityId.trim().length === 0) {
+        return null;
+      }
+      const db = await openDatabase();
+      const tx = db.transaction([STORE_CITIES, STORE_STREETS, STORE_POIS], "readonly");
+      const txPromise = transactionToPromise(tx);
+      const cityRequest = tx.objectStore(STORE_CITIES).get(cityId);
+      const streetIndex = tx.objectStore(STORE_STREETS).index(INDEX_CITY_ID);
+      const poiIndex = tx.objectStore(STORE_POIS).index(INDEX_CITY_ID);
+      const query = idbKeyRange ? idbKeyRange.only(cityId) : cityId;
+      const [city, streets, pois] = await Promise.all([
+        requestToPromise(cityRequest),
+        requestToPromise(streetIndex.getAll(query)),
+        requestToPromise(poiIndex.getAll(query))
+      ]);
+      await txPromise;
+      recordTiming(options, "indexedDbReadMs", startedAt);
+      return city ? { city, streets: streets || [], pois: pois || [] } : null;
+    }
+
     async function hasCity(cityId) {
       if (typeof cityId !== "string" || cityId.trim().length === 0) {
         return false;
@@ -340,7 +378,7 @@
       const city = await getCity(activeId);
       if (!city) {
         try {
-          if (storage) storage.removeItem(activeCityStorageKey);
+          if (storage && getActiveCityId() === activeId) storage.removeItem(activeCityStorageKey);
         } catch (_) {}
         return null;
       }
@@ -348,13 +386,15 @@
     }
 
     async function getActiveCityData() {
-      const city = await getActiveCity();
-      if (!city) return null;
-      const [streets, pois] = await Promise.all([
-        getCityStreets(city.id),
-        getCityPois(city.id)
-      ]);
-      return { city, streets, pois };
+      const activeId = getActiveCityId();
+      if (!activeId) return null;
+      const cityData = await getCityData(activeId);
+      if (!cityData) {
+        try {
+          if (storage && getActiveCityId() === activeId) storage.removeItem(activeCityStorageKey);
+        } catch (_) {}
+      }
+      return cityData;
     }
 
     async function updateCityMetadata(cityId, updates) {
@@ -449,6 +489,7 @@
       getCity,
       getCityStreets,
       getCityPois,
+      getCityData,
       hasCity,
       getActiveCityId,
       setActiveCityId,
@@ -478,6 +519,7 @@
     getCity: defaultInstance.getCity,
     getCityStreets: defaultInstance.getCityStreets,
     getCityPois: defaultInstance.getCityPois,
+    getCityData: defaultInstance.getCityData,
     hasCity: defaultInstance.hasCity,
     getActiveCityId: defaultInstance.getActiveCityId,
     setActiveCityId: defaultInstance.setActiveCityId,

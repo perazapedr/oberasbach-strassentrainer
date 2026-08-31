@@ -12,23 +12,22 @@ Eine statische Web-App nach dem GeoGuessr-Prinzip für das Feuerwehrtraining in 
 
 Im gemischten Modus werden beide Zieltypen möglichst abwechselnd ausgewählt. Ein Ziel wird nicht unmittelbar zweimal hintereinander angezeigt; innerhalb einer laufenden Auswahl werden zunächst noch nicht verwendete Ziele bevorzugt. Die Kategorien der POIs lassen sich einzeln ein- und ausschalten. Die Inhaltsauswahl, Kategorien und die Einstellung „Kategorie beim Alarm anzeigen“ werden unter `oberasbach-strassentrainer-inhalt-v1` in `localStorage` gespeichert und beim nächsten Besuch wiederhergestellt.
 
-Die POIs liegen vollständig in `data/oberasbach-pois.js`. Während einer Spielrunde wird dafür **kein externer POI-Dienst** aufgerufen. Der Datenstand trägt je Eintrag ein Prüfdatum, eine Quelle und gegebenenfalls `needsReview: true` samt `reviewNote`. Neun eindeutig abgegrenzte Schul-, Kita- und Sportgelände besitzen zusätzlich eine lokale OSM-Polygonfläche mit exakter Way-Quelle und Prüfdatum. Gerätehäuser bleiben als Orientierung auf der Karte sichtbar, besitzen in der POI-Datei aber `quizEligible: false` und werden deshalb nie automatisch zur Aufgabe.
+Die kuratierten POIs werden im gebündelten Default-Stadtpaket `data/cities/oberasbach.json` ausgeliefert. Während einer Spielrunde wird dafür **kein externer POI-Dienst** aufgerufen. Der Datenstand trägt je Eintrag ein Prüfdatum, eine Quelle und gegebenenfalls `needsReview: true` samt `reviewNote`. Neun eindeutig abgegrenzte Schul-, Kita- und Sportgelände besitzen zusätzlich eine lokale OSM-Polygonfläche mit exakter Way-Quelle und Prüfdatum. Gerätehäuser bleiben als Orientierung auf der Karte sichtbar, besitzen aber `quizEligible: false` und werden deshalb nie automatisch zur Aufgabe.
 
 Unterstützte POI-Kategorien sind Schule, Kindertagesstätte, Senioren-/Pflegeeinrichtung, Tankstelle, Supermarkt/Einkaufsmarkt, Gesundheit, öffentliche Einrichtung, Sport/Freizeit, Gastronomie/Beherbergung, Unternehmen und sonstiger einsatzrelevanter Ort.
 
 ## Vollständige Straßengeometrien
 
-Diese Version benötigt **keinen Python-Server** und ruft **nicht die Overpass API** auf.
+Das eigentliche Spiel benötigt weder Nominatim noch die Overpass API.
 
-- Die Liste mit 271 Oberasbacher Straßen liegt direkt in `data/oberasbach-streets.js`.
+- Alle 271 kuratierten Oberasbacher Straßen einschließlich ihrer vollständigen lokalen `MultiLineString`-Geometrien liegen in `data/cities/oberasbach.json`.
 - Die unbeschriftete Grundkarte wird als Kartenkachel geladen.
 - Ab Zoomstufe 15 verstärkt eine transparente, ebenfalls unbeschriftete Kartenebene dezent die Straßenkanten. Die normale helle Kartenansicht bleibt dadurch erhalten.
-- Jede Straße erhält beim Laden eine stabile ID, einen Anzeigenamen und ihre expliziten Namensvarianten.
-- Pro neuem Alarm werden über den OpenStreetMap-Geocoder alle streng namensgleichen Linien-Ways in Oberasbach eingesammelt.
-- Die Abschnitte werden dedupliziert und als `MultiLineString`-ähnliche Liste gespeichert. Punktantworten gelten nicht als vollständige Straße.
+- Jede Straße besitzt eine deterministische, stadtbezogene ID, einen kuratierten Hauptnamen, ihre expliziten Namensvarianten und alle zugeordneten OSM-Way-IDs.
+- Die Abschnitte wurden einmalig gegen die administrative OSM-Relation 1016396 abgeglichen und lokal gespeichert. Punktantworten gelten nicht als vollständige Straße.
 - Bei der Auswertung wird der Tipp gegen jeden Abschnitt geprüft; ausschließlich der kleinste Abstand zählt.
 - Bei der Auflösung werden alle Abschnitte markiert.
-- Erfolgreich ermittelte vollständige Straßengeometrien werden in einem neuen Browsercache gespeichert.
+- Ein Geometriecache und eine Geocoder-Wartezeit während der Runde sind nicht mehr erforderlich.
 - Die helle, kontrastreiche Grundkarte ist bewusst beschriftungsfrei und hebt Spielmarkierungen sowie Gerätehäuser deutlich hervor.
 - Die drei Gerätehäuser in Oberasbach, Rehdorf und Altenberg sind als unbeschriftete Feuerwehrsymbole dauerhaft erkennbar.
 - Die App besteht nur aus HTML, CSS und JavaScript und ist deshalb für GitHub Pages geeignet.
@@ -42,11 +41,27 @@ Diese Version benötigt **keinen Python-Server** und ruft **nicht die Overpass A
 - `statistics.js` kapselt die dauerhafte, aggregierte Statistik in `localStorage`.
 - `game-engine.js` enthält ausschließlich Moduskonfiguration, `gameState`, Zustandsübergänge und Rundenergebnisse.
 - `timer.js` stellt einen deadline-basierten Rundentimer bereit, der auch nach einem inaktiven Browser-Tab die korrekte Restzeit berechnet.
-- `app.js` verbindet Engine, Zielauswahl, Geocoding, Kartenansicht und Ergebnisdarstellung. Es enthält keinen parallelen Legacy-Spielzustand mehr.
-- `data/oberasbach-streets.js` stellt die lokale Straßenliste über `window.OBERASBACH_STREETS` bereit.
-- `data/oberasbach-pois.js` stellt Kategorien und den geprüften lokalen POI-Datenstand über `window.OBERASBACH_POI_CATEGORIES` und `window.OBERASBACH_POIS` bereit.
+- `city-storage.js` speichert Städte, Straßen und POIs transaktional in IndexedDB.
+- `city-data-validator.js` prüft heruntergeladene Daten und normalisierte Importpakete über getrennte, gemeinsame Validatoren.
+- `city-package.js` kapselt das versionierte lokale Export-/Importformat, sichere Dateinamen und das Dateigrößenlimit.
+- `city-manager-ui.js` verbindet Suche, Installation, Export, Import, Vorschau, Ersetzen und Aktivierung in einer Oberfläche.
+- `default-city.js` lädt und installiert das mitgelieferte Oberasbach-Paket beim ersten Start.
+- `app.js` verbindet Engine, Zielauswahl, lokalen CityContext, Kartenansicht und Ergebnisdarstellung. Oberasbach verwendet denselben installierten Laufzeitpfad wie jede andere Stadt.
+- `data/oberasbach-streets.js` und `data/oberasbach-pois.js` bleiben als nachvollziehbare kuratierte Build-Quellen erhalten, werden aber nicht mehr im Browser geladen.
+
+## Oberasbach als Default-Stadtpaket
+
+`data/cities/oberasbach.json` ist das kuratierte Default-Paket mit `schemaVersion: 1`, der stabilen Stadt-ID `osm-relation-1016396`, 271 Straßen und 60 POIs. Wenn IndexedDB noch keine Stadt enthält, lädt `default-city.js` dieses lokale Paket, speichert es atomar über `city-storage.js` und aktiviert Oberasbach. Sind bereits Städte installiert, werden weder Daten noch aktive Auswahl überschrieben. Eine bereits installierte automatische OSM-Version von Oberasbach bleibt ebenfalls unverändert.
+
+Die Paketquelle ist als `curated+openstreetmap` gekennzeichnet: Namen, POIs, Kategorien, Adressen und Positionen stammen aus den kuratierten Dateien; OSM ergänzt die technischen Straßengeometrien. Der Auditbericht liegt in `data/cities/oberasbach-osm-comparison.json`. Das Offline-Build-Skript `scripts/build-oberasbach-package.js` verwendet `data/cities/oberasbach-geometries.json` sowie die beiden kuratierten JS-Quellen und benötigt kein Netzwerk.
 
 Der verwendete CARTO-Kachelstil endet auf `_nolabels`; Straßennamen und andere Kartenbeschriftungen werden deshalb nicht geladen.
+
+## Stadt exportieren und importieren
+
+Im Stadtmenü lässt sich jede installierte Stadt als lokale JSON-Datei exportieren. Der Dateiname folgt dem Muster `oberasbach-strassentrainer-v1.json`. Über „Stadtdatei importieren“ kann ein solches Paket auf einer anderen Installation vollständig lokal geprüft, in einer Vorschau angezeigt und erst nach ausdrücklicher Bestätigung gespeichert werden. Eine bereits installierte Stadt wird niemals still überschrieben; beim Ersetzen bleiben ihre getrennt gespeicherten Statistikdaten erhalten.
+
+Formatversion 1 enthält ausschließlich `schemaVersion`, `exportedAt`, `city`, `streets` und `pois`. Statistik, aktive Stadt, `localStorage`, Runtime-Zustände und Caches sind kein Bestandteil eines Stadtpakets. Importdateien sind auf 25 MiB begrenzt. Vor dem Speichern werden Schema, Stadt-ID, Bounds, IDs, `cityId`-Zuordnung, Koordinaten sowie Straßen- und POI-Geometrien geprüft; gefährliche Objektschlüssel wie `__proto__`, `prototype` und `constructor` werden rekursiv blockiert. Export, Import, Validierung und Speicherung benötigen weder Nominatim noch Overpass.
 
 ### Gemeinsame Game-Engine
 
@@ -153,7 +168,9 @@ summary.award = {
 
 ## Dauerhafte lokale Gesamtstatistik
 
-Der aufklappbare Bereich „Statistik“ arbeitet ausschließlich mit `localStorage`; es gibt weder Benutzerkonto noch Backend. Das Datenmodell verwendet `schemaVersion: 2`. Beim Laden werden alle bekannten Zähler, Dimensionen und Zielaggregate validiert. Beschädigte Daten werden verworfen, ohne den Spielstart zu verhindern, und in der Oberfläche erscheint ein verständlicher Hinweis. Die Funktion `migrateStatistics()` übernimmt noch vorhandene Daten des bisherigen Schemas 1 soweit möglich.
+Der aufklappbare Bereich „Statistik“ arbeitet ausschließlich mit `localStorage`; es gibt weder Benutzerkonto noch Backend. Jede installierte Stadt besitzt anhand ihrer stabilen `cityId` einen eigenen Schlüssel nach dem Muster `strassentrainer-statistik-<cityId>-v2`. Beim ersten Start mit installiertem Oberasbach wird eine vorhandene Statistik aus `oberasbach-strassentrainer-statistik-v1` verlustfrei auf den Key für `osm-relation-1016396` kopiert. Ein bereits vorhandener neuer Key wird niemals überschrieben; der alte Key bleibt als nicht destruktive Sicherung bestehen. Der versionierte Marker `strassentrainer-migration-oberasbach-v1` macht die Migration idempotent. Das Datenmodell verwendet `schemaVersion: 2`; beschädigte Altdaten bleiben unverändert und werden nicht als erfolgreiche Migration markiert.
+
+Beim Stadtwechsel werden Runtime-Daten und Statistics Store gemeinsam umgeschaltet. Das Löschen eines installierten Stadtpakets entfernt seine Statistik bewusst nicht: Wird später wieder ein Paket mit derselben `cityId` installiert, steht der bisherige Statistikstand erneut zur Verfügung.
 
 Die Filter bilden folgende Bereiche ab:
 
@@ -177,7 +194,7 @@ Zielrangfolgen sind deterministisch definiert:
 - schlechtestes Ziel: niedrigster Punktedurchschnitt, danach mehr Aufgaben, danach Ziel-ID
 - häufigstes Ziel: höchste Aufgabenzahl, danach höherer Punktedurchschnitt, danach Ziel-ID
 
-Export und Import verwenden JSON mit `schemaVersion`. Beim Import kann zwischen „Zusammenführen“ und „Ersetzen“ gewählt werden. Überschneidungen anhand der begrenzten Deduplizierungs-IDs werden beim Zusammenführen abgelehnt, damit dieselben bekannten Runden nicht doppelt eingehen. „Statistik zurücksetzen“ und ein ersetzender Import verlangen vorher eine Sicherheitsbestätigung.
+Export und Import verwenden ein JSON-Format mit `cityId`, `cityName`, `exportedAt` und dem validierten Statistikobjekt. Ein Import wird nur für die aktive Stadt angenommen; Dateien einer anderen Stadt und stadtlose Altformate werden abgelehnt. Beim Import kann zwischen „Zusammenführen“ und „Ersetzen“ gewählt werden. Überschneidungen anhand der begrenzten Deduplizierungs-IDs werden beim Zusammenführen abgelehnt, damit dieselben bekannten Runden nicht doppelt eingehen. „Statistik zurücksetzen“ wirkt nur auf die aktive Stadt und verlangt ebenso wie ein ersetzender Import vorher eine Sicherheitsbestätigung.
 
 Ein Rundenergebnis enthält immer:
 
@@ -250,7 +267,7 @@ Nach jeder Datenänderung `node tests/targets-tests.js` ausführen. Der Test pr�
 
 ## Lokal testen
 
-Du kannst `index.html` direkt öffnen. Zuverlässiger ist ein kleiner lokaler Entwicklungsserver:
+Da das gebündelte JSON-Paket per `fetch()` geladen wird, die App über einen kleinen lokalen Entwicklungsserver öffnen:
 
 ```bash
 cd oberasbach-strassentrainer
@@ -270,6 +287,13 @@ node tests/statistics-tests.js
 node tests/game-engine-tests.js
 node tests/timer-tests.js
 node tests/free-mode-integration-tests.js
+node tests/city-storage-tests.js
+node tests/osm-service-tests.js
+node tests/city-data-validator-tests.js
+node tests/city-manager-ui-tests.js
+node tests/multi-city-integration-tests.js
+node tests/oberasbach-migration-tests.js
+node tests/city-package-tests.js
 ```
 
 Die Tests decken Straßen- und POI-Geometrien, den lokalen Datenbestand, alle Engine-Zustände, Ergebnisfelder, Moduskonfigurationen, dauerhafte Statistik und den vollständigen Freien Modus ab. Die Integration prüft außerdem ausgeblendete Kategorien, gespeicherte Inhaltswahl und die Balance des gemischten Modus. Für den Zeitmodus werden insbesondere Tipp in der ersten Sekunde, Tipp kurz vor Ablauf, Ablauf ohne Tipp, ein simulierter Hintergrund-Zeitsprung, genau ein aktiver Timer, zehn aufeinanderfolgende Runden, Wiederholung und vorzeitiger Abbruch geprüft. Der Prüfungsmodus wird mit zehn vollständigen Aufgaben, einem Timeout, unterdrückter Zwischenauflösung, Abschlussliste, Karten-Nachprüfung, Statistiktrennung sowie Warnungen bei Reload, Zurücknavigation und Abbruch getestet. Separate Grenzwerttests prüfen 64,99 %, 65 %, 75 %, 85 %, 95 %, 99,99 % und exakt 100 % sowie die alternative Medaillendarstellung.
@@ -330,19 +354,31 @@ Alle Dateipfade sind relativ aufgebaut und funktionieren deshalb auch in einem P
 - `statistics.js`: persistente aggregierte Statistik
 - `game-engine.js`: gemeinsame Modus- und Runden-Engine
 - `timer.js`: deadline-basierter Countdown
-- `app.js`: Controller, Geocoding, Karte, Darstellung und Diagnose
-- `data/oberasbach-streets.js`: lokale Straßenliste
-- `data/oberasbach-pois.js`: lokale Kategorien und POIs mit Quellen- und Prüfstatus
+- `app.js`: Controller, lokaler CityContext, Karte, Darstellung und Diagnose
+- `default-city.js`: lokaler First-Start-Import und rückwärtskompatible Oberasbach-Statistikmigration
+- `city-storage.js`: transaktionaler lokaler Stadtspeicher
+- `city-data-validator.js`: Daten- und Stadtpaketvalidierung
+- `city-package.js`: Stadt-Export, Stadt-Import, Dateinamen und Sicherheitsgrenzen
+- `city-manager-ui.js`: zentrale Oberfläche zur Stadtverwaltung
+- `data/cities/oberasbach.json`: gebündeltes kuratiertes Default-Stadtpaket
+- `data/cities/oberasbach-geometries.json`: geprüfte lokale Eingabe für den reproduzierbaren Paket-Build
+- `data/cities/oberasbach-osm-comparison.json`: maschinenlesbarer OSM-Abgleich vom 28. August 2026
+- `data/oberasbach-streets.js`: kuratierte Straßenquelle für den Paket-Build
+- `data/oberasbach-pois.js`: kuratierte POI-Quelle mit Quellen- und Prüfstatus
+- `scripts/build-oberasbach-package.js`: deterministischer Offline-Paket-Build
 - `tests/geometry-tests.js`: ausführbare Geometrie-Testfälle
 - `tests/targets-tests.js`: POI-Datenintegrität, Punkt-/Polygonauswertung und Zieltypen
 - `tests/statistics-tests.js`: Schema, Filter, Aggregate, Deduplizierung, Migration sowie Export/Import
 - `tests/game-engine-tests.js`: Zustands-, Ergebnis- und Statistiktests
 - `tests/timer-tests.js`: Uhr-, Deadline-, Hintergrund- und Abbruchtests
 - `tests/free-mode-integration-tests.js`: vollständige Abläufe von Freiem Modus, Zeitmodus und Prüfungsmodus
+- `tests/multi-city-integration-tests.js`: CityContext-Wechsel, Bounds, Marker und stadtbezogene Statistik
+- `tests/oberasbach-migration-tests.js`: vollständige Phase-8-Daten-, Bootstrap- und Statistikmigration
+- `tests/city-package-tests.js`: Phase-9-Format, Sicherheitsfehler, Atomizität und semantische Roundtrips
 - `.nojekyll`: verhindert eine unnötige Jekyll-Verarbeitung bei GitHub Pages
 
 ## Externe Dienste
 
-Die Anwendung verwendet OpenStreetMap-Daten, einen beschriftungsfreien CARTO-Kartenstil sowie sparsame Nominatim-Abfragen ausschließlich zur bestehenden Vorbereitung vollständiger Straßenlinien. Eine Straßenabfrage kann bis zu 50 getrennte OSM-Ergebnisse desselben Namens liefern. Die Anwendung erzwingt zwischen externen Straßenabfragen eine Pause und speichert vollständige Ergebnisse lokal. POI-Aufgaben werden dagegen immer direkt aus `data/oberasbach-pois.js` geladen und lösen keine externe POI- oder Geocoding-Abfrage aus.
+Die Installation zusätzlicher Städte verwendet Nominatim und Overpass. Das eigentliche Spiel liest Straßen, POIs und Geometrien ausschließlich aus IndexedDB und ruft weder Nominatim noch Overpass auf. Oberasbach wird vollständig aus dem lokalen Default-Paket installiert. Lediglich die Kartenkacheln werden weiterhin vom konfigurierten beschriftungsfreien CARTO-Kartenstil geladen.
 
 Kartendaten © OpenStreetMap-Mitwirkende, ODbL. Kartenstil © CARTO.

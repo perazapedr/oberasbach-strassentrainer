@@ -122,11 +122,11 @@ h1 {
 }
 
 .city-selector-button {
-  min-height: 44px;
-  max-width: 250px;
-  padding: 9px 12px;
+  min-height: 40px;
+  max-width: 220px;
+  padding: 8px 11px;
   border: 1px solid rgba(255, 255, 255, 0.18);
-  border-radius: 12px;
+  border-radius: 999px;
   display: flex;
   align-items: center;
   gap: 7px;
@@ -192,12 +192,13 @@ h1 {
 
 .installed-city-row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 42px;
+  grid-template-columns: minmax(0, 1fr) 42px 42px;
   gap: 5px;
   border-radius: 10px;
 }
 
 .installed-city-select,
+.installed-city-export,
 .installed-city-delete,
 .city-menu-add {
   min-height: 44px;
@@ -218,6 +219,7 @@ h1 {
 }
 
 .installed-city-select:hover,
+.installed-city-export:hover,
 .installed-city-delete:hover,
 .city-menu-add:hover {
   background: var(--panel-soft);
@@ -253,6 +255,17 @@ h1 {
 .installed-city-delete {
   color: var(--primary);
   font-size: 1rem;
+}
+
+.installed-city-export {
+  min-height: 44px;
+  border: 0;
+  border-radius: 9px;
+  color: var(--guess);
+  background: transparent;
+  font: inherit;
+  font-size: 1rem;
+  cursor: pointer;
 }
 
 .city-menu-separator {
@@ -1042,14 +1055,16 @@ body.city-modal-open {
   padding: clamp(12px, 3vw, 32px);
   display: grid;
   place-items: center;
-  overflow-y: auto;
+  overflow: hidden;
+  overscroll-behavior: contain;
   background: rgba(7, 15, 23, 0.72);
   backdrop-filter: blur(3px);
 }
 
 .city-manager-dialog {
   width: min(100%, 660px);
-  max-height: min(88vh, 820px);
+  max-height: min(calc(100dvh - 32px), 820px);
+  overflow: hidden;
   display: flex;
   flex-direction: column;
   border: 1px solid rgba(255, 255, 255, 0.5);
@@ -1105,17 +1120,6 @@ body.city-modal-open {
   padding: 20px;
   overflow-y: auto;
   overscroll-behavior-y: contain;
-}
-
-.city-transition-note {
-  margin: 0 0 17px;
-  padding: 11px 13px;
-  border-left: 4px solid var(--guess);
-  border-radius: 8px;
-  color: var(--muted);
-  background: rgba(0, 103, 185, 0.06);
-  font-size: 0.76rem;
-  line-height: 1.45;
 }
 
 .city-manager-alert {
@@ -1278,6 +1282,20 @@ body.city-modal-open {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 9px;
+}
+
+.city-preview-metadata {
+  margin: 0 0 13px;
+  padding: 11px 13px;
+  border-radius: 10px;
+  color: var(--muted);
+  background: var(--panel-soft);
+  font-size: 0.78rem;
+  line-height: 1.5;
+}
+
+.city-preview-metadata:empty {
+  display: none;
 }
 
 .city-preview-counts > div {
@@ -1813,8 +1831,9 @@ body.city-modal-open {
 
   .city-manager-dialog {
     width: 100%;
-    min-height: 100dvh;
-    max-height: none;
+    height: 100dvh;
+    min-height: 0;
+    max-height: 100dvh;
     border: 0;
     border-radius: 0;
   }

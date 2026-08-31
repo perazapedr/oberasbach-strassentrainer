@@ -3,6 +3,7 @@
 const geometryApi = window.StreetGeometry;
 const targetApi = window.StrassentrainerTargets;
 const statisticsApi = window.StrassentrainerStatistics;
+const defaultCityApi = window.StrassentrainerDefaultCity;
 const timerApi = window.StrassentrainerTimer;
 const {
   GAME_STATUS,
@@ -23,26 +24,59 @@ const MAP_STYLE = {
 };
 
 const CONFIG = {
-  municipalityName: "Oberasbach",
-  postalCode: "90522",
-  countryName: "Deutschland",
-  initialCenter: [49.4356, 10.9694],
   initialZoom: 13,
-  geometryBbox: [10.9384173, 49.4017231, 10.9987491, 49.4454542],
-  bounds: L.latLngBounds([49.4017231, 10.9384173], [49.4454542, 10.9987491]),
-  geocoderDelayMs: 1150,
-  geocoderResultLimit: 50,
-  geometryCacheKey: "oberasbach-strassentrainer-geometrien-v3-vollstaendig",
-  statisticsStorageKey: "oberasbach-strassentrainer-statistik-v1",
+  minZoom: 8,
+  maxZoom: 19,
+  maxBoundsPadding: 0.45,
   contentSettingsStorageKey: "oberasbach-strassentrainer-inhalt-v1",
-  debug: new URLSearchParams(window.location.search).get("debug") === "1",
-  fireStations: [
-    { position: [49.4193202, 10.9594029], name: "Freiwillige Feuerwehr Oberasbach" },
-    { position: [49.4132163, 10.9510362], name: "Freiwillige Feuerwehr Rehdorf" },
-    { position: [49.4337566, 10.9716011], name: "Freiwillige Feuerwehr Altenberg" }
-  ],
-  maxCacheEntries: 120
+  debug: new URLSearchParams(window.location.search).get("debug") === "1"
 };
+
+const RUNTIME_STATUS = Object.freeze({
+  BOOTING: "booting",
+  LOADING_CITY: "loading-city",
+  READY: "ready",
+  ERROR: "error"
+});
+
+function monotonicNow() {
+  return typeof performance !== "undefined" && typeof performance.now === "function"
+    ? performance.now()
+    : Date.now();
+}
+
+function recordRuntimeTiming(diagnostics, name, startedAt) {
+  if (!diagnostics || typeof diagnostics !== "object" || Array.isArray(diagnostics)) return;
+  if (!diagnostics.timingsMs) diagnostics.timingsMs = {};
+  diagnostics.timingsMs[name] = Math.round((monotonicNow() - startedAt) * 10) / 10;
+}
+
+const POI_CATEGORY_LABELS = Object.freeze({
+  fire_station: "Feuerwehr",
+  school: "Schule",
+  kindergarten: "Kindergarten",
+  childcare: "Kindertagesstätte",
+  supermarket: "Supermarkt"
+});
+
+function cityName(metadata) {
+  return String(metadata && (metadata.displayName || metadata.name) || "Unbekannte Stadt").trim();
+}
+
+function createLeafletBounds(metadata) {
+  const bounds = metadata && metadata.bounds;
+  if (!bounds) return null;
+  const south = Number(bounds.south);
+  const west = Number(bounds.west);
+  const north = Number(bounds.north);
+  const east = Number(bounds.east);
+  if (![south, west, north, east].every(Number.isFinite)
+    || south > north || west > east) return null;
+  const leafletBounds = L.latLngBounds([south, west], [north, east]);
+  return !leafletBounds || (typeof leafletBounds.isValid === "function" && !leafletBounds.isValid())
+    ? null
+    : leafletBounds;
+}
 
 const els = {
   alarmCard: document.querySelector(".alarm-card"),
@@ -107,6 +141,7 @@ const els = {
   returnToExamResultsButton: document.getElementById("returnToExamResultsButton"),
   legendCard: document.getElementById("legendCard"),
   statisticsDetails: document.getElementById("statisticsDetails"),
+  statisticsHeading: document.getElementById("statisticsHeading"),
   statisticsModeFilter: document.getElementById("statisticsModeFilter"),
   statisticsTargetFilter: document.getElementById("statisticsTargetFilter"),
   statisticsOverview: document.getElementById("statisticsOverview"),
@@ -125,13 +160,12 @@ const els = {
 };
 
 const map = L.map("map", {
-  center: CONFIG.initialCenter,
-  zoom: CONFIG.initialZoom,
+  center: [51, 10],
+  zoom: CONFIG.minZoom,
   zoomControl: true,
   attributionControl: false,
-  minZoom: 12,
-  maxZoom: 19,
-  maxBounds: CONFIG.bounds.pad(0.45),
+  minZoom: CONFIG.minZoom,
+  maxZoom: CONFIG.maxZoom,
   preferCanvas: true
 });
 
@@ -157,20 +191,28 @@ L.tileLayer(MAP_STYLE.roadContrastUrl, {
   crossOrigin: true
 }).addTo(map);
 
-map.fitBounds(CONFIG.bounds, { animate: false, padding: [12, 12] });
-
 const solutionLayers = L.featureGroup().addTo(map);
 const answerLayers = L.featureGroup().addTo(map);
 const fireStationLayers = L.featureGroup().addTo(map);
 
-const statisticsStore = statisticsApi.createStatisticsStore(
+let statisticsStore = statisticsApi.createStatisticsStore(
   localStorage,
-  CONFIG.statisticsStorageKey
+  statisticsApi.getStatisticsStorageKey(defaultCityApi.DEFAULT_CITY_ID),
+  {
+    cityId: defaultCityApi.DEFAULT_CITY_ID,
+    cityName: "Oberasbach"
+  }
 );
+const gameStatisticsStore = Object.freeze({
+  getSnapshot: (...args) => statisticsStore.getSnapshot(...args),
+  recordGameStarted: (...args) => statisticsStore.recordGameStarted(...args),
+  recordRound: (...args) => statisticsStore.recordRound(...args),
+  recordGameFinished: (...args) => statisticsStore.recordGameFinished(...args)
+});
 const gameEngine = createGameEngine({
   scoreCalculator: (distanceMeters, _config, target) =>
     targetApi.calculateTargetScore(distanceMeters, target),
-  statisticsStore,
+  statisticsStore: gameStatisticsStore,
   hitThresholdsMeters: statisticsApi.HIT_THRESHOLDS_METERS
 });
 const gameState = gameEngine.gameState;
@@ -185,23 +227,25 @@ const roundTimer = timerApi.createDeadlineTimer({
   onExpire: handleRoundTimeout
 });
 
-const poiCategories = Array.isArray(window.OBERASBACH_POI_CATEGORIES)
-  ? window.OBERASBACH_POI_CATEGORIES
-  : [];
+let poiCategories = [];
 const contentRepository = {
-  streetTargets: targetApi.prepareStreetTargets(window.OBERASBACH_STREETS, geometryApi),
-  poiTargets: targetApi.preparePoiTargets(window.OBERASBACH_POIS, poiCategories),
+  streetTargets: [],
+  poiTargets: [],
   lastTargetId: null,
   selectedTargetIds: new Set(),
   unavailableTargetIds: new Set(),
   selectionCounts: { street: 0, poi: 0 }
 };
 
-let contentSettings = loadContentSettings();
-
-const geometryRepository = {
-  lastRequestAt: 0
+let contentSettings = null;
+let cityContext = null;
+const runtimeState = {
+  status: RUNTIME_STATUS.BOOTING,
+  error: null,
+  activationId: 0
 };
+let activationCommitQueue = Promise.resolve();
+let pendingActivation = null;
 
 function isCountdownMode(mode = gameState.config.mode) {
   return mode === "timed" || mode === "exam";
@@ -219,14 +263,28 @@ const mapView = {
     answerLayers.clearLayers();
   },
   resetViewport(animate = true) {
-    map.fitBounds(CONFIG.bounds, { animate, padding: [12, 12] });
+    if (cityContext?.leafletBounds) {
+      map.fitBounds(cityContext.leafletBounds, { animate, padding: [12, 12] });
+      return;
+    }
+    if (cityContext?.metadata?.center) {
+      map.setView(
+        [Number(cityContext.metadata.center.lat), Number(cityContext.metadata.center.lon)],
+        Number(cityContext.metadata.defaultZoom) || CONFIG.initialZoom,
+        { animate }
+      );
+      return;
+    }
+    map.setView([51, 10], CONFIG.minZoom, { animate });
   },
   showRoundSolution(guessLatLng, nearestCoordinate, target) {
     renderRoundSolutionOnMap(guessLatLng, nearestCoordinate, target);
   }
 };
 
-function addFireStations() {
+function renderFireStations() {
+  fireStationLayers.clearLayers();
+  if (!cityContext) return;
   const stationIcon = L.divIcon({
     className: "",
     html: '<div class="fire-station-marker" aria-hidden="true">🚒</div>',
@@ -234,14 +292,406 @@ function addFireStations() {
     iconAnchor: [16, 16]
   });
 
-  CONFIG.fireStations.forEach(station => {
-    L.marker(station.position, {
+  cityContext.fireStations.forEach(station => {
+    L.marker([station.latitude, station.longitude], {
       icon: stationIcon,
       interactive: false,
       keyboard: false,
-      alt: station.name
+      alt: station.displayName
     }).addTo(fireStationLayers);
   });
+}
+
+function getPoiCategoryLabel(categoryId, suppliedCategories = []) {
+  const supplied = suppliedCategories.find(category => category.id === categoryId);
+  if (supplied?.label) return supplied.label;
+  if (POI_CATEGORY_LABELS[categoryId]) return POI_CATEGORY_LABELS[categoryId];
+  return String(categoryId || "Ort")
+    .replace(/[_-]+/g, " ")
+    .replace(/^./, character => character.toLocaleUpperCase("de-DE"));
+}
+
+function normalizeCityMetadata(metadata) {
+  if (!metadata || typeof metadata !== "object") {
+    throw new Error("Stadtmetadaten fehlen.");
+  }
+  const id = String(metadata.id || "").trim();
+  const name = cityName(metadata);
+  if (!id || !name || name === "Unbekannte Stadt") {
+    throw new Error("Die Stadt besitzt keine gültige ID oder Bezeichnung.");
+  }
+  return {
+    ...metadata,
+    id,
+    name: String(metadata.name || name).trim(),
+    displayName: name,
+    bounds: metadata.bounds ? { ...metadata.bounds } : null,
+    center: metadata.center ? { ...metadata.center } : null,
+    postalCodes: Array.isArray(metadata.postalCodes) ? [...metadata.postalCodes] : []
+  };
+}
+
+function buildCityContext(cityData, diagnostics = null) {
+  const contextStartedAt = monotonicNow();
+  const sourceType = "installed";
+  if (!cityData || !Array.isArray(cityData.streets) || !Array.isArray(cityData.pois)) {
+    throw new Error("Das lokale Stadtpaket ist unvollständig.");
+  }
+  const metadata = normalizeCityMetadata(cityData.city);
+  const leafletBounds = createLeafletBounds(metadata);
+  const centerLat = Number(metadata.center?.lat);
+  const centerLon = Number(metadata.center?.lon);
+  if (!leafletBounds && ![centerLat, centerLon].every(Number.isFinite)) {
+    throw new Error(`Für ${cityName(metadata)} fehlen gültige Kartenkoordinaten.`);
+  }
+
+  cityData.streets.forEach(street => {
+    if (street?.cityId !== metadata.id) {
+      throw new Error("Das Stadtpaket enthält eine Straße aus einer anderen Stadt.");
+    }
+  });
+  cityData.pois.forEach(poi => {
+    if (poi?.cityId !== metadata.id) {
+      throw new Error("Das Stadtpaket enthält einen POI aus einer anderen Stadt.");
+    }
+  });
+
+  const suppliedCategories = [];
+  const categoryIds = [...new Set(cityData.pois
+    .map(poi => String(poi?.category || "other-relevant"))
+    .filter(Boolean))];
+  const categories = categoryIds.map(id => ({
+    id,
+    label: getPoiCategoryLabel(id, suppliedCategories)
+  }));
+  const targetStartedAt = monotonicNow();
+  const streetTargets = targetApi.prepareStreetTargets(cityData.streets, geometryApi);
+  const poiTargets = targetApi.preparePoiTargets(cityData.pois, categories);
+  recordRuntimeTiming(diagnostics, "targetPreparationMs", targetStartedAt);
+
+  if (streetTargets.length === 0) {
+    throw new Error(`Für ${cityName(metadata)} sind keine Straßen gespeichert.`);
+  }
+  const invalidStreet = streetTargets.find(target =>
+    !targetApi.isValidTargetGeometry(target, geometryApi));
+  if (invalidStreet) {
+    throw new Error(`Die lokale Geometrie von „${invalidStreet.displayName}“ ist unvollständig.`);
+  }
+  const invalidPoi = poiTargets.find(target =>
+    !target.displayName
+    || !Number.isFinite(target.latitude)
+    || !Number.isFinite(target.longitude)
+    || !targetApi.isValidTargetGeometry(target, geometryApi));
+  if (invalidPoi) {
+    throw new Error(`Der lokale POI „${invalidPoi.displayName || invalidPoi.id}“ ist unvollständig.`);
+  }
+
+  const fireStations = poiTargets.filter(poi => poi.category === "fire_station"
+    || poi.subcategory === "Feuerwehrgerätehaus");
+
+  const context = {
+    sourceType,
+    metadata,
+    streetTargets,
+    poiTargets,
+    poiCategories: categories,
+    fireStations,
+    leafletBounds
+  };
+  recordRuntimeTiming(diagnostics, "buildCityContextMs", contextStartedAt);
+  return context;
+}
+
+function createStatisticsStoreForCityContext(context) {
+  if (!context?.metadata?.id) throw new Error("Für die Statistik fehlt eine gültige Stadt-ID.");
+  if (context.metadata.id === defaultCityApi.DEFAULT_CITY_ID) {
+    defaultCityApi.migrateLegacyOberasbachStatistics(localStorage, statisticsApi);
+  }
+  const storageKey = statisticsApi.getStatisticsStorageKey(context.metadata.id);
+  return statisticsApi.createStatisticsStore(localStorage, storageKey, {
+    cityId: context.metadata.id,
+    cityName: cityName(context.metadata)
+  });
+}
+
+async function loadCityContext(cityId, diagnostics = null) {
+  const startedAt = monotonicNow();
+  const storage = window.StrassentrainerCityStorage;
+  if (!storage) throw new Error("Der lokale Stadtspeicher ist nicht verfügbar.");
+  let cityData = null;
+  if (typeof storage.getCityData === "function") {
+    cityData = await storage.getCityData(cityId, { diagnostics });
+  } else {
+    const city = await storage.getCity(cityId);
+    if (city) {
+      const [streets, pois] = await Promise.all([
+        storage.getCityStreets(cityId),
+        storage.getCityPois(cityId)
+      ]);
+      cityData = { city, streets, pois };
+    }
+  }
+  if (!cityData) throw new Error("Die ausgewählte Stadt wurde lokal nicht gefunden.");
+  const context = buildCityContext(cityData, diagnostics);
+  recordRuntimeTiming(diagnostics, "loadCityContextMs", startedAt);
+  return context;
+}
+
+async function clearActiveCityIdIfCurrent(expectedCityId) {
+  const storage = window.StrassentrainerCityStorage;
+  if (!storage || typeof storage.setActiveCityId !== "function") return;
+  const currentId = typeof storage.getActiveCityId === "function"
+    ? storage.getActiveCityId()
+    : expectedCityId;
+  if (currentId === expectedCityId) await storage.setActiveCityId(null);
+}
+
+async function loadInitialCityContext() {
+  const storage = window.StrassentrainerCityStorage;
+  if (!storage || typeof storage.getAllCities !== "function") {
+    throw new Error("Der lokale Stadtspeicher ist nicht verfügbar.");
+  }
+  let cities = await storage.getAllCities();
+  if (cities.length === 0) {
+    await defaultCityApi.installBundledDefaultCityIfNeeded(storage);
+    cities = await storage.getAllCities();
+  }
+  if (cities.length === 0) throw new Error("Es ist kein lokales Stadtpaket verfügbar.");
+
+  let migrationWarning = null;
+  if (cities.some(city => city.id === defaultCityApi.DEFAULT_CITY_ID)) {
+    const migration = defaultCityApi.migrateLegacyOberasbachStatistics(localStorage, statisticsApi);
+    if (migration.status === "invalid-legacy-statistics") {
+      migrationWarning = "Die bisherige Oberasbach-Statistik war beschädigt und wurde nicht verändert.";
+    }
+  }
+
+  let expectedCityId = typeof storage.getActiveCityId === "function"
+    ? storage.getActiveCityId()
+    : null;
+  let warning = migrationWarning;
+  if (!expectedCityId || !cities.some(city => city.id === expectedCityId)) {
+    if (expectedCityId) {
+      await clearActiveCityIdIfCurrent(expectedCityId);
+      warning = warning || "Die zuletzt aktive Stadt wurde nicht mehr gefunden. Eine vorhandene lokale Stadt wurde aktiviert.";
+    }
+    expectedCityId = cities[0].id;
+    await storage.setActiveCityId(expectedCityId);
+  }
+
+  try {
+    return { context: await loadCityContext(expectedCityId), warning };
+  } catch (error) {
+    console.warn("Aktive Stadt konnte nicht geladen werden", error);
+    try { await clearActiveCityIdIfCurrent(expectedCityId); } catch (_) {}
+    const fallback = cities.find(city => city.id !== expectedCityId);
+    if (!fallback) throw error;
+    await storage.setActiveCityId(fallback.id);
+    return {
+      context: await loadCityContext(fallback.id),
+      warning: warning || "Die zuletzt aktive Stadt konnte nicht geladen werden. Eine andere lokale Stadt wurde aktiviert."
+    };
+  }
+}
+
+function resetRuntimeForCityChange() {
+  stopAllTimers();
+  roundPreparationToken += 1;
+  deactivateExamHistoryGuard();
+  examGeometryByRound.clear();
+  gameEngine.resetGame();
+  mapView.clearRound();
+  fireStationLayers.clearLayers();
+  contentRepository.lastTargetId = null;
+  contentRepository.selectedTargetIds.clear();
+  contentRepository.unavailableTargetIds.clear();
+  contentRepository.selectionCounts = { street: 0, poi: 0 };
+}
+
+function applyCityContext(
+  nextContext,
+  nextStatisticsStore = createStatisticsStoreForCityContext(nextContext),
+  diagnostics = null
+) {
+  const applyStartedAt = monotonicNow();
+  if (!nextContext?.metadata || !Array.isArray(nextContext.streetTargets)) {
+    throw new Error("Der neue Stadtkontext ist ungültig.");
+  }
+  if (!nextStatisticsStore || typeof nextStatisticsStore.getSnapshot !== "function") {
+    throw new Error("Der Statistik-Speicher der neuen Stadt ist ungültig.");
+  }
+  resetRuntimeForCityChange();
+  cityContext = nextContext;
+  statisticsStore = nextStatisticsStore;
+  gameState.statistics = statisticsStore.getSnapshot();
+  contentRepository.streetTargets = nextContext.streetTargets;
+  contentRepository.poiTargets = nextContext.poiTargets;
+  poiCategories = nextContext.poiCategories;
+  contentSettings = loadContentSettings();
+  applyContentSettingsToControls();
+  applyContentSettingsToGameConfig();
+
+  const mapStartedAt = monotonicNow();
+  if (nextContext.leafletBounds) {
+    map.setMaxBounds(nextContext.leafletBounds.pad(CONFIG.maxBoundsPadding));
+    map.fitBounds(nextContext.leafletBounds, { animate: false, padding: [12, 12] });
+  } else {
+    map.setMaxBounds(null);
+    map.setView(
+      [Number(nextContext.metadata.center.lat), Number(nextContext.metadata.center.lon)],
+      Number(nextContext.metadata.defaultZoom) || CONFIG.initialZoom,
+      { animate: false }
+    );
+  }
+  recordRuntimeTiming(diagnostics, "mapBoundsUpdateMs", mapStartedAt);
+  els.mapPanel.setAttribute(
+    "aria-label",
+    `Unbeschriftete Straßenkarte von ${cityName(nextContext.metadata)}`
+  );
+  const markerStartedAt = monotonicNow();
+  renderFireStations();
+  recordRuntimeTiming(diagnostics, "fireStationMarkersMs", markerStartedAt);
+  renderStatistics();
+  const statisticsLoadWarning = statisticsStore.getLoadWarning();
+  setStatisticsMessage(statisticsLoadWarning || "", statisticsLoadWarning ? "error" : "");
+  recordRuntimeTiming(diagnostics, "applyCityContextMs", applyStartedAt);
+}
+
+function finishRuntimeReady(warning = null) {
+  runtimeState.status = RUNTIME_STATUS.READY;
+  runtimeState.error = warning;
+  startGame(MODE_CONFIGS.free);
+  if (warning) setStatus(warning, "error");
+}
+
+function setRuntimeLoading(message) {
+  runtimeState.status = RUNTIME_STATUS.LOADING_CITY;
+  runtimeState.error = null;
+  els.mainButton.disabled = true;
+  els.mainButton.textContent = "Stadt wird geladen …";
+  setStatus(message || "Stadtdaten werden geladen …");
+}
+
+function canChangeRuntimeCity() {
+  return runtimeState.status === RUNTIME_STATUS.READY;
+}
+
+async function performCityActivation(cityId, diagnostics = null) {
+  const activationStartedAt = monotonicNow();
+  const activationId = ++runtimeState.activationId;
+  setRuntimeLoading("Die ausgewählte Stadt wird lokal geladen …");
+  let nextContext;
+  let nextStatisticsStore;
+  try {
+    nextContext = await loadCityContext(cityId, diagnostics);
+    const statisticsStartedAt = monotonicNow();
+    nextStatisticsStore = createStatisticsStoreForCityContext(nextContext);
+    recordRuntimeTiming(diagnostics, "statisticsStoreMs", statisticsStartedAt);
+  } catch (error) {
+    if (activationId === runtimeState.activationId) {
+      await activationCommitQueue.catch(() => {});
+      if (activationId === runtimeState.activationId && cityContext) {
+        finishRuntimeReady("Die ausgewählte Stadt konnte nicht geladen werden. Die bisherige Stadt bleibt aktiv.");
+      }
+    }
+    throw new Error("Die ausgewählte Stadt konnte nicht geladen werden. Die bisherige Stadt bleibt aktiv.", { cause: error });
+  }
+  if (activationId !== runtimeState.activationId) return null;
+
+  const commit = async () => {
+    if (activationId !== runtimeState.activationId) return null;
+    const previousContext = cityContext;
+    const previousStatisticsStore = statisticsStore;
+    const storage = window.StrassentrainerCityStorage;
+    const previousActiveCityId = typeof storage.getActiveCityId === "function"
+      ? storage.getActiveCityId()
+      : (previousContext?.sourceType === "installed" ? previousContext.metadata.id : null);
+    try {
+      applyCityContext(nextContext, nextStatisticsStore, diagnostics);
+      await storage.setActiveCityId(cityId);
+    } catch (error) {
+      try {
+        const currentActiveCityId = typeof storage.getActiveCityId === "function"
+          ? storage.getActiveCityId()
+          : null;
+        if (currentActiveCityId !== previousActiveCityId) {
+          await storage.setActiveCityId(previousActiveCityId || null);
+        }
+      } catch (_) {
+        // Der Runtime-Rollback bleibt auch bei blockiertem localStorage vollständig.
+      }
+      if (previousContext) applyCityContext(previousContext, previousStatisticsStore);
+      if (activationId === runtimeState.activationId && previousContext) {
+        finishRuntimeReady("Die ausgewählte Stadt konnte nicht aktiviert werden. Die bisherige Stadt bleibt aktiv.");
+      }
+      throw new Error("Die ausgewählte Stadt konnte nicht aktiviert werden. Die bisherige Stadt bleibt aktiv.", { cause: error });
+    }
+    if (activationId === runtimeState.activationId) finishRuntimeReady();
+    recordRuntimeTiming(diagnostics, "activationTotalMs", activationStartedAt);
+    return nextContext;
+  };
+  const queuedCommit = activationCommitQueue.catch(() => {}).then(commit);
+  activationCommitQueue = queuedCommit.catch(() => {});
+  return queuedCommit;
+}
+
+function activateCity(cityId, options = {}) {
+  const normalizedCityId = String(cityId || "").trim();
+  if (!normalizedCityId) return Promise.reject(new Error("Eine gültige Stadt-ID ist erforderlich."));
+  if (cityContext?.sourceType === "installed"
+    && cityContext.metadata.id === normalizedCityId
+    && runtimeState.status === RUNTIME_STATUS.READY
+    && options.force !== true) {
+    return Promise.resolve(cityContext);
+  }
+  if (pendingActivation?.cityId === normalizedCityId) return pendingActivation.promise;
+  const promise = performCityActivation(normalizedCityId, options.diagnostics || null);
+  pendingActivation = { cityId: normalizedCityId, promise };
+  void promise.finally(() => {
+    if (pendingActivation?.promise === promise) pendingActivation = null;
+  }).catch(() => {});
+  return promise;
+}
+
+async function deleteCity(cityId) {
+  const storage = window.StrassentrainerCityStorage;
+  if (!storage || typeof storage.deleteCity !== "function") {
+    throw new Error("Der lokale Stadtspeicher ist nicht verfügbar.");
+  }
+  const isRuntimeCity = cityContext?.sourceType === "installed"
+    && cityContext.metadata.id === cityId;
+  if (!isRuntimeCity) return storage.deleteCity(cityId);
+  if (!canChangeRuntimeCity()) {
+    throw new Error("Die aktive Stadt kann während einer laufenden Runde nicht gelöscht werden.");
+  }
+  const activationId = ++runtimeState.activationId;
+  setRuntimeLoading("Die aktive Stadt wird gelöscht …");
+  const commit = async () => {
+    await storage.deleteCity(cityId);
+    if (activationId !== runtimeState.activationId) return true;
+    let cities = await storage.getAllCities();
+    if (cities.length === 0) {
+      await defaultCityApi.installBundledDefaultCityIfNeeded(storage);
+      cities = await storage.getAllCities();
+    }
+    if (cities.length === 0) throw new Error("Nach dem Löschen ist kein Stadtpaket verfügbar.");
+    const nextCityId = storage.getActiveCityId?.() || cities[0].id;
+    const nextContext = await loadCityContext(nextCityId);
+    if (storage.getActiveCityId?.() !== nextCityId) await storage.setActiveCityId(nextCityId);
+    applyCityContext(nextContext, createStatisticsStoreForCityContext(nextContext));
+    finishRuntimeReady();
+    return true;
+  };
+  const queuedCommit = activationCommitQueue.catch(() => {}).then(commit);
+  activationCommitQueue = queuedCommit.catch(() => {});
+  try {
+    return await queuedCommit;
+  } catch (error) {
+    if (activationId === runtimeState.activationId) {
+      finishRuntimeReady("Die Stadt konnte nicht lokal gelöscht werden. Sie bleibt aktiv.");
+    }
+    throw error;
+  }
 }
 
 function setStatus(message, type = "loading") {
@@ -453,126 +903,6 @@ function selectRoundTarget(excluded = new Set(), requestedType = null) {
   return pool.length > 0 ? pool[Math.floor(Math.random() * pool.length)] : null;
 }
 
-function readGeometryCache() {
-  try {
-    const parsed = JSON.parse(localStorage.getItem(CONFIG.geometryCacheKey) || "{}");
-    return parsed && typeof parsed === "object" ? parsed : {};
-  } catch (_) {
-    return {};
-  }
-}
-
-function getCachedGeometry(street) {
-  const cached = readGeometryCache()[street.id];
-  if (!cached || !geometryApi.isValidStreetGeometry(cached.geometry, street.id)) return null;
-  return cached.geometry;
-}
-
-function saveCachedGeometry(street, geometry) {
-  try {
-    const cache = readGeometryCache();
-    cache[street.id] = { geometry, savedAt: Date.now() };
-
-    const entries = Object.entries(cache)
-      .sort((a, b) => (b[1].savedAt || 0) - (a[1].savedAt || 0))
-      .slice(0, CONFIG.maxCacheEntries);
-
-    localStorage.setItem(CONFIG.geometryCacheKey, JSON.stringify(Object.fromEntries(entries)));
-  } catch (_) {
-    // Die App funktioniert auch, wenn der Browser lokalen Speicher blockiert.
-  }
-}
-
-async function waitForGeocoderSlot() {
-  const elapsed = Date.now() - geometryRepository.lastRequestAt;
-  const waitMs = Math.max(0, CONFIG.geocoderDelayMs - elapsed);
-  if (waitMs > 0) {
-    await new Promise(resolve => window.setTimeout(resolve, waitMs));
-  }
-  geometryRepository.lastRequestAt = Date.now();
-}
-
-async function fetchJsonWithTimeout(url, timeoutMs = 14000) {
-  const controller = new AbortController();
-  const timeout = window.setTimeout(() => controller.abort(), timeoutMs);
-
-  try {
-    const response = await fetch(url, {
-      signal: controller.signal,
-      headers: { Accept: "application/json" }
-    });
-    if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    return await response.json();
-  } finally {
-    window.clearTimeout(timeout);
-  }
-}
-
-async function geocodeWithNominatim(street) {
-  const queries = [street.displayName, ...(street.aliases || [])]
-    .filter((value, index, values) => value && values.indexOf(value) === index);
-  const [minLon, minLat, maxLon, maxLat] = CONFIG.geometryBbox;
-
-  for (const streetName of queries) {
-    await waitForGeocoderSlot();
-    const params = new URLSearchParams({
-      q: `${streetName}, ${CONFIG.postalCode} ${CONFIG.municipalityName}, ${CONFIG.countryName}`,
-      format: "geojson",
-      polygon_geojson: "1",
-      addressdetails: "1",
-      dedupe: "0",
-      bounded: "1",
-      viewbox: `${minLon},${maxLat},${maxLon},${minLat}`,
-      countrycodes: "de",
-      limit: String(CONFIG.geocoderResultLimit),
-      "accept-language": "de"
-    });
-
-    const data = await fetchJsonWithTimeout(`https://nominatim.openstreetmap.org/search.php?${params}`);
-    const sameStreetInOberasbach = (data.features || []).filter(feature => {
-      const properties = feature.properties || {};
-      const isRoad = properties.category === "highway" || properties.class === "highway";
-      return isRoad
-        && geometryApi.featureMatchesStreet(feature, street)
-        && geometryApi.featureBelongsToMunicipality(
-          feature, CONFIG.municipalityName, CONFIG.postalCode
-        );
-    });
-    const geometry = geometryApi.mergeStreetFeatures(
-      sameStreetInOberasbach, street, CONFIG.geometryBbox, "nominatim"
-    );
-    if (geometry) return geometry;
-
-    debugGeometry("Keine vollständige Liniengeometrie in Geocoding-Antwort", null, {
-      streetId: street.id,
-      displayName: street.displayName,
-      query: streetName,
-      returnedFeatureCount: (data.features || []).length,
-      matchingFeatureCount: sameStreetInOberasbach.length,
-      returnedGeometryTypes: [...new Set((data.features || []).map(feature => feature.geometry?.type))]
-    });
-  }
-
-  return null;
-}
-
-async function resolveStreetGeometry(street) {
-  const cached = getCachedGeometry(street);
-  if (cached) {
-    return cached;
-  }
-
-  let geometry = null;
-  try {
-    geometry = await geocodeWithNominatim(street);
-  } catch (error) {
-    console.warn("Nominatim-Abfrage fehlgeschlagen", error);
-  }
-
-  if (geometry) saveCachedGeometry(street, geometry);
-  return geometry;
-}
-
 function renderTargetCategory(target) {
   const categoryLabel = target.categoryLabel || "Ort";
   const shouldShow = Boolean(gameState.config.showTargetCategory && categoryLabel);
@@ -647,9 +977,7 @@ async function startRound() {
     if (!target) break;
     attempted.add(target.id);
 
-    const geometry = target.targetType === targetApi.TARGET_TYPES.STREET
-      ? await resolveStreetGeometry(target)
-      : target.geometry;
+    const geometry = target.geometry;
     if (preparationToken !== roundPreparationToken
       || gameState.status !== GAME_STATUS.PREPARING) return;
     const preparedTarget = { ...target, geometry };
@@ -976,6 +1304,7 @@ function formatStatisticTarget(target) {
 }
 
 function renderStatistics() {
+  els.statisticsHeading.textContent = `Statistik – ${cityName(cityContext?.metadata)}`;
   const view = statisticsStore.getView({
     mode: els.statisticsModeFilter.value,
     targetType: els.statisticsTargetFilter.value
@@ -1044,7 +1373,10 @@ function exportStatistics() {
   const url = URL.createObjectURL(blob);
   const link = document.createElement("a");
   link.href = url;
-  link.download = `strassentrainer-statistik-${new Date().toISOString().slice(0, 10)}.json`;
+  link.download = statisticsApi.getStatisticsExportFilename(
+    cityName(cityContext?.metadata),
+    new Date()
+  );
   document.body.appendChild(link);
   link.click();
   link.remove();
@@ -1083,7 +1415,7 @@ async function importStatisticsFile(event) {
 
 function resetStatistics() {
   if (!window.confirm(
-    "Statistik wirklich zurücksetzen? Alle lokal gespeicherten Statistikwerte werden gelöscht."
+    `Statistik für ${cityName(cityContext?.metadata)} wirklich zurücksetzen? Nur die Statistik dieser Stadt wird gelöscht.`
   )) return;
   statisticsStore.reset();
   registerCurrentGameAfterStatisticsChange();
@@ -1144,13 +1476,13 @@ function renderIdleGame() {
   const contentLabel = contentSettings.contentSelection === "streets"
     ? "Straßen"
     : (contentSettings.contentSelection === "pois" ? "Orte und Einrichtungen" : "Ziele");
-  els.instruction.textContent = `${availableCount} Oberasbacher ${contentLabel} stehen zur Auswahl.`;
+  els.instruction.textContent = `${availableCount} ${contentLabel} in ${cityName(cityContext?.metadata)} stehen zur Auswahl.`;
   els.mainButton.disabled = availableCount === 0;
   els.mainButton.textContent = "Ersten Alarm auslösen";
   els.mapHint.textContent = "Die Karte enthält bewusst keine Straßennamen.";
   setStatus(
     availableCount > 0
-      ? "GitHub-Pages-Modus aktiv: POIs werden aus der lokalen geprüften Datendatei geladen."
+      ? `${cityName(cityContext?.metadata)} ist lokal geladen und spielbereit.`
       : "Für die gewählte Inhaltsauswahl ist kein aktives Ziel vorhanden.",
     availableCount > 0 ? "ready" : "error"
   );
@@ -1653,24 +1985,42 @@ function handlePageHide() {
   }
 }
 
-function initializeApplication() {
+async function initializeApplication() {
   mapView.clearRound();
   els.resultCard.classList.add("hidden");
-  applyContentSettingsToControls();
-  renderStatistics();
-  const statisticsLoadWarning = statisticsStore.getLoadWarning();
-  if (statisticsLoadWarning) setStatisticsMessage(statisticsLoadWarning, "error");
+  els.targetStreet.textContent = "Stadtdaten werden geladen …";
+  els.instruction.textContent = "Die zuletzt aktive Stadt wird aus dem lokalen Speicher vorbereitet.";
+  els.mainButton.disabled = true;
+  els.mainButton.textContent = "Initialisierung läuft …";
+  setRuntimeLoading("Initialisiere die lokale Stadt …");
 
-  if (contentRepository.streetTargets.length < 20 || contentRepository.poiTargets.length === 0) {
-    els.targetStreet.textContent = "Lokale Straßenliste fehlt";
-    els.instruction.textContent = "Die lokalen Straßen- oder POI-Datendateien wurden nicht korrekt geladen.";
+  try {
+    const initial = await loadInitialCityContext();
+    const initialStatisticsStore = createStatisticsStoreForCityContext(initial.context);
+    applyCityContext(initial.context, initialStatisticsStore);
+    finishRuntimeReady(initial.warning);
+  } catch (error) {
+    runtimeState.status = RUNTIME_STATUS.ERROR;
+    runtimeState.error = error;
+    els.targetStreet.textContent = "Stadtdaten konnten nicht geladen werden";
+    els.instruction.textContent = "Bitte prüfe die lokalen Projektdateien und lade die Seite erneut.";
     els.mainButton.disabled = true;
     els.mainButton.textContent = "Dateien prüfen";
-    setStatus("Die statischen Projektdaten sind unvollständig.", "error");
-    return;
+    setStatus("Die Anwendung konnte keinen vollständigen Stadtkontext aufbauen.", "error");
   }
 
-  startGame(MODE_CONFIGS.free);
+  if (window.StrassentrainerCityManager) {
+    try {
+      await window.StrassentrainerCityManager.init({
+        canChangeCity: canChangeRuntimeCity,
+        activateCity,
+        deleteCity,
+        getRuntimeCity: () => cityContext?.metadata || null
+      });
+    } catch (error) {
+      console.warn("Stadtmanager konnte nicht initialisiert werden", error);
+    }
+  }
 }
 
 async function prepareStreetForDebug(nameOrId) {
@@ -1686,7 +2036,9 @@ async function prepareStreetForDebug(nameOrId) {
   gameEngine.startRound();
   els.resultCard.classList.add("hidden");
   setStatus(`Debug: Lade vollständige Geometrie für ${street.displayName} …`);
-  const geometry = await resolveStreetGeometry(street);
+  const geometry = geometryApi.isValidStreetGeometry(street.geometry, street.id)
+    ? street.geometry
+    : null;
   if (!geometry) throw new Error(`Keine vollständige Liniengeometrie für ${street.displayName}.`);
   activateTargetForRound(street, geometry);
   return getGeometryDiagnostics();
@@ -1730,6 +2082,7 @@ window.STRASSENTRAINER_DEBUG = {
   getStatistics: () => statisticsStore.getSnapshot(),
   getStatisticsView: filters => statisticsStore.getView(filters),
   exportStatistics: () => statisticsStore.exportJson(),
+  getStatisticsStorageKey: () => statisticsStore.getStorageKey(),
   importStatistics: (jsonText, strategy = "replace") => {
     const snapshot = statisticsStore.importJson(jsonText, strategy);
     gameState.statistics = snapshot;
@@ -1750,7 +2103,6 @@ window.STRASSENTRAINER_DEBUG = {
   prepareStreet: nameOrId => prepareStreetForDebug(nameOrId)
 };
 
-addFireStations();
 map.on("click", event => submitGuess(event.latlng));
 els.mainButton.addEventListener("click", handleMainButton);
 els.modeSelect.addEventListener("change", handleModeChange);
@@ -1788,10 +2140,13 @@ window.addEventListener("keydown", event => {
   }
 });
 
-initializeApplication();
+const startupPromise = initializeApplication();
 
-if (window.StrassentrainerCityManager) {
-  void window.StrassentrainerCityManager.init({
-    canChangeCity: () => ![GAME_STATUS.ACTIVE, GAME_STATUS.PREPARING].includes(gameState.status)
-  });
-}
+window.StrassentrainerRuntime = Object.freeze({
+  ready: startupPromise,
+  activateCity,
+  deleteCity,
+  canChangeCity: canChangeRuntimeCity,
+  getActiveCity: () => cityContext?.metadata || null,
+  getStatus: () => ({ status: runtimeState.status, error: runtimeState.error })
+});

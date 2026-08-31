@@ -3,6 +3,7 @@
 const assert = require("node:assert/strict");
 const {
   SUPPORTED_POI_CATEGORIES,
+  MIN_PLAYABLE_STREETS,
   STREET_MERGE_DISTANCE_METERS,
   POI_POSSIBLE_DUPLICATE_DISTANCE_METERS,
   CURATED_POSITION_DIFFERENCE_METERS,
@@ -119,9 +120,32 @@ test("Browser-Global und öffentliche API sind verfügbar", () => {
 
 test("zentrale Kategorien und Schwellenwerte sind dokumentiert exportiert", () => {
   assert.deepEqual(SUPPORTED_POI_CATEGORIES, ["fire_station", "school", "kindergarten", "supermarket"]);
+  assert.equal(MIN_PLAYABLE_STREETS, 5);
   assert.equal(STREET_MERGE_DISTANCE_METERS, 8);
   assert.equal(POI_POSSIBLE_DUPLICATE_DISTANCE_METERS, 50);
   assert.equal(CURATED_POSITION_DIFFERENCE_METERS, 50);
+});
+
+test("Downloadmodus blockiert MIN - 1 Straßen und erlaubt den Grenzwert", () => {
+  const streets = Array.from({ length: MIN_PLAYABLE_STREETS }, (_, index) => street(
+    `threshold-${index}`,
+    `Teststraße ${index}`,
+    [[[10.001 + index * 0.002, 49.001], [10.0015 + index * 0.002, 49.002]]]
+  ));
+  const belowMinimum = validateCityData(
+    packageFixture({ streets: streets.slice(0, MIN_PLAYABLE_STREETS - 1) }),
+    { sourceMode: "download" }
+  );
+  const atMinimum = validateCityData(
+    packageFixture({ streets }),
+    { sourceMode: "download" }
+  );
+
+  assert.equal(belowMinimum.valid, false);
+  assert.ok(allCodes(belowMinimum).includes("CITY_TOO_FEW_PLAYABLE_STREETS"));
+  assert.match(belowMinimum.validation.municipality.errors[0].message, /nur 4 spielbare Straßen/);
+  assert.equal(atMinimum.valid, true);
+  assert.ok(!allCodes(atMinimum).includes("CITY_TOO_FEW_PLAYABLE_STREETS"));
 });
 
 test("vollständig gültiges Stadtpaket bleibt gültig", () => {

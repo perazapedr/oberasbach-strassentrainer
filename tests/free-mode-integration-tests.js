@@ -7,6 +7,7 @@ const geometryApi = require("../geometry.js");
 const targetApi = require("../targets.js");
 const statisticsApi = require("../statistics.js");
 const engineApi = require("../game-engine.js");
+const defaultCityApi = require("../default-city.js");
 let deadlineTimerHarness = null;
 const timerApi = {
   createDeadlineTimer(options) {
@@ -56,9 +57,12 @@ class Element {
     this.classList = new ClassList();
     this.style = {};
     this.value = "";
+    this.attributes = {};
   }
   addEventListener(type, listener) { this[`on${type}`] = listener; }
   closest() { return this; }
+  setAttribute(name, value) { this.attributes[name] = String(value); }
+  getAttribute(name) { return this.attributes[name] || null; }
 }
 
 function createLayer(kind, data, options = {}) {
@@ -102,7 +106,7 @@ const elementIds = [
   "examAverageDistance", "examAverageTime", "examHitRate", "examUnanswered",
   "examBestRound", "examWorstRound", "examTaskList",
   "examTargetBreakdown",
-  "returnToExamResultsButton", "legendCard", "mapPanel", "statisticsDetails",
+  "returnToExamResultsButton", "legendCard", "mapPanel", "statisticsDetails", "statisticsHeading",
   "statisticsModeFilter", "statisticsTargetFilter", "statisticsOverview",
   "statisticsBestTarget", "statisticsWorstTarget", "statisticsMostPlayedTarget",
   "statisticsHighestExam", "statisticsHighestRank", "statisticsLastPlayed",
@@ -128,7 +132,8 @@ elements.statisticsImportStrategy.value = "merge";
 const storageValues = new Map();
 const localStorage = {
   getItem: key => storageValues.get(key) || null,
-  setItem: (key, value) => storageValues.set(key, String(value))
+  setItem: (key, value) => storageValues.set(key, String(value)),
+  removeItem: key => storageValues.delete(key)
 };
 
 const rawStreets = Array.from({ length: 30 }, (_, index) => ({
@@ -170,32 +175,57 @@ const rawPois = [
       ]]
     }
   },
-  { id: "poi-public-test", displayName: "Testrathaus", category: "public-facility", latitude: 49.427, longitude: 10.957 }
+  { id: "poi-public-test", displayName: "Testrathaus", category: "public-facility", latitude: 49.427, longitude: 10.957 },
+  { id: "poi-fire-test-1", displayName: "Testfeuerwehr 1", category: "other-relevant", subcategory: "Feuerwehrgerätehaus", latitude: 49.421, longitude: 10.951, quizEligible: false },
+  { id: "poi-fire-test-2", displayName: "Testfeuerwehr 2", category: "other-relevant", subcategory: "Feuerwehrgerätehaus", latitude: 49.422, longitude: 10.952, quizEligible: false },
+  { id: "poi-fire-test-3", displayName: "Testfeuerwehr 3", category: "other-relevant", subcategory: "Feuerwehrgerätehaus", latitude: 49.423, longitude: 10.953, quizEligible: false }
 ];
 const preparedStreets = geometryApi.prepareStreetRecords(rawStreets);
-const geometryCache = {};
-preparedStreets.forEach((street, index) => {
-  geometryCache[street.id] = {
-    savedAt: Date.now(),
-    geometry: {
-      streetId: street.id,
-      displayName: street.displayName,
-      type: "MultiLineString",
-      sections: [[[10.94 + index * 0.0001, 49.42], [10.945 + index * 0.0001, 49.42]]],
-      source: "test",
-      featureIds: [`way/${index + 1}`],
-      sourceGeometryTypes: ["LineString"]
-    }
-  };
-});
-localStorage.setItem(
-  "oberasbach-strassentrainer-geometrien-v3-vollstaendig",
-  JSON.stringify(geometryCache)
-);
+const cityId = defaultCityApi.DEFAULT_CITY_ID;
+const installedStreets = preparedStreets.map((street, index) => ({
+  id: `${cityId}:${street.id}`,
+  cityId,
+  name: street.displayName,
+  aliases: street.aliases,
+  geometry: {
+    type: "MultiLineString",
+    coordinates: [[[10.94 + index * 0.0001, 49.42], [10.945 + index * 0.0001, 49.42]]]
+  },
+  osmWayIds: [index + 1]
+}));
+const installedPois = rawPois.map(poi => ({
+  ...poi,
+  id: `${cityId}:${poi.id}`,
+  cityId,
+  name: poi.displayName,
+  position: { lat: poi.latitude, lon: poi.longitude }
+}));
+const installedPackage = {
+  city: {
+    id: cityId,
+    name: "Oberasbach",
+    displayName: "Oberasbach",
+    bounds: { south: 49.4017231, west: 10.9384173, north: 49.4454542, east: 10.9987491 },
+    center: { lat: 49.4236043, lon: 10.9708709 },
+    defaultZoom: 13
+  },
+  streets: installedStreets,
+  pois: installedPois
+};
+let activeCityId = cityId;
+const cityStorage = {
+  getAllCities: async () => [installedPackage.city],
+  getActiveCityId: () => activeCityId,
+  setActiveCityId: async id => { activeCityId = id; },
+  getCityData: async id => id === cityId ? installedPackage : null,
+  hasCity: async id => id === cityId
+};
 
 const mapObject = {
   handlers: {},
   fitBounds() {},
+  setMaxBounds() {},
+  setView() {},
   createPane() { return { style: {} }; },
   on(type, listener) { this.handlers[type] = listener; }
 };
@@ -239,11 +269,10 @@ const windowObject = {
   StreetGeometry: geometryApi,
   StrassentrainerTargets: targetApi,
   StrassentrainerStatistics: statisticsApi,
+  StrassentrainerDefaultCity: defaultCityApi,
   StrassentrainerEngine: engineApi,
   StrassentrainerTimer: timerApi,
-  OBERASBACH_STREETS: rawStreets,
-  OBERASBACH_POI_CATEGORIES: poiCategories,
-  OBERASBACH_POIS: rawPois,
+  StrassentrainerCityStorage: cityStorage,
   location: { search: "", href: "https://example.test/strassentrainer/" },
   setTimeout,
   clearTimeout,
@@ -280,6 +309,7 @@ globalThis.__appTest = {
 vm.runInNewContext(source, context, { filename: "app.js" });
 
 (async () => {
+  await windowObject.StrassentrainerRuntime.ready;
   const debug = windowObject.STRASSENTRAINER_DEBUG;
   let state = debug.getGameState();
   assert.equal(state.status, "idle");
@@ -347,8 +377,8 @@ vm.runInNewContext(source, context, { filename: "app.js" });
   elements.secondsPerRoundSelect.value = "15";
   elements.totalRoundsSelect.value = "10";
   elements.mainButton.onclick();
-  assert.equal(deadlineTimerHarness.isRunning(), false,
-    "Während der Vorbereitung darf noch kein Countdown laufen");
+  assert.equal(deadlineTimerHarness.isRunning(), true,
+    "Mit lokaler Geometrie kann der Countdown ohne Geocoder-Wartezeit starten");
   await nextTask();
   state = debug.getGameState();
   assert.equal(state.status, "active");
@@ -414,8 +444,8 @@ vm.runInNewContext(source, context, { filename: "app.js" });
   elements.secondsPerRoundSelect.value = "15";
   elements.totalRoundsSelect.value = "10";
   elements.mainButton.onclick();
-  assert.equal(deadlineTimerHarness.isRunning(), false,
-    "Auch die Prüfungszeit beginnt nicht während der Vorbereitung");
+  assert.equal(deadlineTimerHarness.isRunning(), true,
+    "Auch die Prüfungszeit beginnt mit lokaler Geometrie ohne Geocoder-Wartezeit");
   await nextTask();
   state = debug.getGameState();
   assert.equal(state.status, "active");
@@ -436,7 +466,8 @@ vm.runInNewContext(source, context, { filename: "app.js" });
     mapObject.handlers.click({ latlng: { lat: 49.42, lng: 10.942 } });
     state = context.__appTest.getInternalState();
     assert.equal(state.results.length, roundNumber);
-    assert.equal(state.status, "preparing");
+    assert.equal(state.status, "active",
+      "Die nächste lokale Prüfungsgeometrie ist ohne Geocoder-Wartephase aktiv");
     assert.equal(elements.resultCard.classList.contains("hidden"), true);
     assert.equal(context.__appTest.solutionLayers.layers.length, 0,
       "Während der Prüfung darf keine Zielstraße markiert werden");
@@ -576,7 +607,7 @@ vm.runInNewContext(source, context, { filename: "app.js" });
   assert.equal(state.currentRound.target.targetType, "poi");
   assert.equal(elements.targetCategoryLabel.classList.contains("hidden"), true,
     "Die POI-Kategorie muss für schwierigere Alarme ausblendbar sein");
-  const selectedPoi = rawPois.find(poi => poi.id === state.currentRound.target.id);
+  const selectedPoi = installedPois.find(poi => poi.id === state.currentRound.target.id);
   mapObject.handlers.click({
     latlng: {
       lat: selectedPoi.latitude,
@@ -596,7 +627,9 @@ vm.runInNewContext(source, context, { filename: "app.js" });
   schoolCategoryCheckbox.dataset.poiCategory = "school";
   schoolCategoryCheckbox.checked = false;
   elements.poiCategoryOptions.onchange({ target: schoolCategoryCheckbox });
-  assert.deepEqual(debug.getContentSettings().poiCategories, ["public-facility"],
+  assert.deepEqual(
+    Array.from(debug.getContentSettings().poiCategories),
+    ["public-facility", "other-relevant"],
     "Einzelne POI-Kategorien müssen deaktivierbar und gespeichert sein");
 
   elements.contentSelectionSelect.value = "mixed";

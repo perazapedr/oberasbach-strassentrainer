@@ -6,6 +6,8 @@
   "use strict";
 
   const STATISTICS_SCHEMA_VERSION = 2;
+  const STATISTICS_EXPORT_SCHEMA_VERSION = 1;
+  const STATISTICS_STORAGE_PREFIX = "strassentrainer-statistik-";
   const MODES = Object.freeze(["free", "timed", "exam"]);
   const TARGET_TYPES = Object.freeze(["street", "poi"]);
   const HIT_THRESHOLDS_METERS = Object.freeze({ street: 100, poi: 100 });
@@ -69,6 +71,33 @@
 
   function clone(value) {
     return JSON.parse(JSON.stringify(value));
+  }
+
+  function getStatisticsStorageKey(cityId) {
+    const normalizedCityId = String(cityId || "").trim();
+    if (!normalizedCityId) throw new Error("Eine gültige Stadt-ID ist erforderlich.");
+    return `${STATISTICS_STORAGE_PREFIX}${encodeURIComponent(normalizedCityId)}-v2`;
+  }
+
+  function createCitySlug(cityName) {
+    const slug = String(cityName || "")
+      .trim()
+      .toLocaleLowerCase("de-DE")
+      .replaceAll("ß", "ss")
+      .replaceAll("ä", "ae")
+      .replaceAll("ö", "oe")
+      .replaceAll("ü", "ue")
+      .normalize("NFKD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-+|-+$/g, "");
+    return slug || "stadt";
+  }
+
+  function getStatisticsExportFilename(cityName, date = new Date()) {
+    const parsedDate = date instanceof Date ? date : new Date(date);
+    const safeDate = Number.isFinite(parsedDate.getTime()) ? parsedDate : new Date();
+    return `strassentrainer-statistik-${createCitySlug(cityName)}-${safeDate.toISOString().slice(0, 10)}.json`;
   }
 
   function finiteNonNegative(value, fallback = 0) {
@@ -341,7 +370,7 @@
     return true;
   }
 
-  function parseStatisticsJson(jsonText) {
+  function parseJsonDocument(jsonText) {
     if (typeof jsonText !== "string" || jsonText.length === 0) {
       throw new Error("Die ausgewählte Datei ist leer.");
     }
@@ -354,8 +383,82 @@
     } catch (_) {
       throw new Error("Die Datei enthält kein gültiges JSON.");
     }
+    return parsed;
+  }
+
+  function parseStatisticsValue(value) {
+    validateStatistics(value);
+    return migrateStatistics(value);
+  }
+
+  function parseStatisticsJson(jsonText) {
+    const parsed = parseJsonDocument(jsonText);
     validateStatistics(parsed);
     return migrateStatistics(parsed);
+  }
+
+  function parseStatisticsImportJson(jsonText, options = {}) {
+    const parsed = parseJsonDocument(jsonText);
+    const isEnvelope = parsed
+      && typeof parsed === "object"
+      && !Array.isArray(parsed)
+      && Object.prototype.hasOwnProperty.call(parsed, "statistics");
+
+    if (!isEnvelope) {
+      if (!options.allowLegacyImport) {
+        throw new Error(
+          "Diese ältere Statistikdatei enthält keine Stadtzuordnung und kann nur im bisherigen Oberasbach-Trainer importiert werden."
+        );
+      }
+      return {
+        cityId: options.expectedCityId || null,
+        cityName: options.expectedCityName || null,
+        exportedAt: null,
+        statistics: parseStatisticsValue(parsed),
+        legacy: true
+      };
+    }
+
+    const importedCityId = typeof parsed.cityId === "string" ? parsed.cityId.trim() : "";
+    const importedCityName = typeof parsed.cityName === "string" ? parsed.cityName.trim() : "";
+    if (parsed.schemaVersion !== STATISTICS_EXPORT_SCHEMA_VERSION) {
+      throw new Error(
+        `Nicht unterstützte Version des Statistikexports: ${String(parsed.schemaVersion ?? "fehlt")}.`
+      );
+    }
+    if (!importedCityId) throw new Error("Die Statistikdatei enthält keine gültige Stadt-ID.");
+    if (!importedCityName) throw new Error("Die Statistikdatei enthält keinen gültigen Stadtnamen.");
+    if (parsed.exportedAt !== undefined && normalizeIsoDate(parsed.exportedAt) === null) {
+      throw new Error("Die Statistikdatei enthält kein gültiges Exportdatum.");
+    }
+
+    const statistics = parseStatisticsValue(parsed.statistics);
+    const expectedCityId = String(options.expectedCityId || "").trim();
+    if (expectedCityId && importedCityId !== expectedCityId) {
+      const expectedCityName = String(options.expectedCityName || "Aktuelle Stadt").trim();
+      const sameDisplayName = importedCityName.localeCompare(
+        expectedCityName,
+        "de",
+        { sensitivity: "base" }
+      ) === 0;
+      const importedCityLabel = sameDisplayName
+        ? `${importedCityName} (${importedCityId})`
+        : importedCityName;
+      const expectedCityLabel = sameDisplayName
+        ? `${expectedCityName} (${expectedCityId})`
+        : expectedCityName;
+      throw new Error(
+        `Diese Statistik gehört zu ${importedCityLabel}. Aktuelle Stadt: ${expectedCityLabel}.`
+      );
+    }
+
+    return {
+      cityId: importedCityId,
+      cityName: importedCityName,
+      exportedAt: parsed.exportedAt ? normalizeIsoDate(parsed.exportedAt) : null,
+      statistics,
+      legacy: false
+    };
   }
 
   function targetTypesForSelection(contentSelection) {
@@ -552,9 +655,11 @@
     return merged;
   }
 
-  function createStatisticsStore(storage, storageKey) {
+  function createStatisticsStore(storage, storageKey, options = {}) {
     let statistics = createEmptyStatistics();
     let loadWarning = null;
+    const storeCityId = String(options.cityId || "").trim();
+    const storeCityName = String(options.cityName || "").trim();
 
     try {
       const storedText = storage?.getItem(storageKey);
@@ -702,11 +807,24 @@
     }
 
     function exportJson() {
-      return JSON.stringify(statistics, null, 2);
+      if (!storeCityId) return JSON.stringify(statistics, null, 2);
+      return JSON.stringify({
+        schemaVersion: STATISTICS_EXPORT_SCHEMA_VERSION,
+        cityId: storeCityId,
+        cityName: storeCityName || storeCityId,
+        exportedAt: new Date().toISOString(),
+        statistics
+      }, null, 2);
     }
 
     function importJson(jsonText, strategy = "replace") {
-      const imported = parseStatisticsJson(jsonText);
+      const imported = storeCityId
+        ? parseStatisticsImportJson(jsonText, {
+          expectedCityId: storeCityId,
+          expectedCityName: storeCityName || storeCityId,
+          allowLegacyImport: options.allowLegacyImport === true
+        }).statistics
+        : parseStatisticsJson(jsonText);
       if (strategy === "merge") {
         const duplicateRound = imported.deduplication.recentRoundIds.some(id =>
           statistics.deduplication.recentRoundIds.includes(id)
@@ -738,6 +856,8 @@
     }
 
     return {
+      getStorageKey: () => storageKey,
+      getCity: () => storeCityId ? { id: storeCityId, name: storeCityName || storeCityId } : null,
       getSnapshot: () => clone(statistics),
       getView,
       getLoadWarning: () => loadWarning,
@@ -752,11 +872,16 @@
 
   return {
     STATISTICS_SCHEMA_VERSION,
+    STATISTICS_EXPORT_SCHEMA_VERSION,
     HIT_THRESHOLDS_METERS,
+    getStatisticsStorageKey,
+    createCitySlug,
+    getStatisticsExportFilename,
     createEmptyStatistics,
     validateStatistics,
     migrateStatistics,
     parseStatisticsJson,
+    parseStatisticsImportJson,
     mergeStatistics,
     createStatisticsStore
   };

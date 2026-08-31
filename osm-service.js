@@ -19,6 +19,13 @@
   const OVERPASS_API_URL = "https://overpass-api.de/api/interpreter";
   const OVERPASS_TIMEOUT_MS = 120000;
   const OVERPASS_QUERY_TIMEOUT_SECONDS = 90;
+  const OVERPASS_RETRY_DELAY_MS = 1200;
+  const MAX_DOWNLOAD_RETRIES = 1;
+  const DOWNLOAD_CHUNK_AREA_THRESHOLD_KM2 = 120;
+  const DOWNLOAD_CHUNK_MAX_SPAN_KM = 30;
+  const MAX_INITIAL_CHUNK_DEPTH = 2;
+  const MAX_CHUNK_DEPTH = 3;
+  const MAX_CHUNK_REQUESTS = 96;
   const CITY_DATA_VERSION = 1;
   const DEFAULT_CITY_ZOOM = 13;
 
@@ -66,11 +73,41 @@
   ]);
 
   const VALID_OSM_TYPES = new Set(["node", "way", "relation"]);
+  const GERMAN_BASE_COLLATOR = new Intl.Collator("de", { sensitivity: "base" });
+  const GERMAN_COLLATOR = new Intl.Collator("de");
+  const DEFAULT_COLLATOR = new Intl.Collator();
   const MUNICIPALITY_TYPES = new Set(["city", "town", "village", "municipality"]);
   const EXCLUDED_PLACE_TYPES = new Set([
     "borough", "city_block", "city_district", "croft", "farm", "hamlet",
     "isolated_dwelling", "locality", "neighbourhood", "quarter", "suburb"
   ]);
+
+  function monotonicNow() {
+    if (typeof performance !== "undefined" && typeof performance.now === "function") {
+      return performance.now();
+    }
+    return Date.now();
+  }
+
+  function createProfiler(target) {
+    const enabled = Boolean(target && typeof target === "object" && !Array.isArray(target));
+    const timings = enabled ? (target.timingsMs = {}) : null;
+    const counts = enabled ? (target.counts = {}) : null;
+    return {
+      enabled,
+      start() { return enabled ? monotonicNow() : 0; },
+      end(name, startedAt) {
+        if (enabled) timings[name] = (timings[name] || 0) + monotonicNow() - startedAt;
+      },
+      increment(name, amount = 1) {
+        if (enabled) counts[name] = (counts[name] || 0) + amount;
+      },
+      finish() {
+        if (!enabled) return;
+        for (const name of Object.keys(timings)) timings[name] = Math.round(timings[name] * 10) / 10;
+      }
+    };
+  }
 
   function finiteNumber(value) {
     if (value === null || value === undefined || value === "") return null;
@@ -126,9 +163,9 @@
   }
 
   function compareNames(first, second) {
-    return first.localeCompare(second, "de", { sensitivity: "base" })
-      || first.localeCompare(second, "de")
-      || first.localeCompare(second);
+    return GERMAN_BASE_COLLATOR.compare(first, second)
+      || GERMAN_COLLATOR.compare(first, second)
+      || DEFAULT_COLLATOR.compare(first, second);
   }
 
   function parseBoundingBox(value) {
@@ -290,9 +327,23 @@
     return url.toString();
   }
 
-  function buildOverpassQuery(relationId, queryTimeoutSeconds = OVERPASS_QUERY_TIMEOUT_SECONDS) {
+  function buildBoundaryQuery(relationId, queryTimeoutSeconds = OVERPASS_QUERY_TIMEOUT_SECONDS) {
     const id = validOsmId(relationId);
     if (id === null) throw new TypeError("A valid municipality relation ID is required.");
+    const timeout = Math.max(1, Math.floor(queryTimeoutSeconds));
+    return [
+      `[out:json][timeout:${timeout}];`,
+      `relation(${id});`,
+      "out body geom;"
+    ].join("\n");
+  }
+
+  function buildChunkDataQuery(relationId, chunk, queryTimeoutSeconds = OVERPASS_QUERY_TIMEOUT_SECONDS) {
+    const id = validOsmId(relationId);
+    if (id === null) throw new TypeError("A valid municipality relation ID is required.");
+    if (!chunk || !normalizeMunicipalityBounds(chunk)) {
+      throw new TypeError("A valid DownloadChunk is required.");
+    }
     const timeout = Math.max(1, Math.floor(queryTimeoutSeconds));
     const highwayPattern = DEFAULT_STREET_HIGHWAY_TYPES.join("|");
     const amenityPattern = POI_CATEGORY_DEFINITIONS
@@ -300,15 +351,17 @@
       .map(definition => definition.value)
       .join("|");
 
+    const bbox = [chunk.south, chunk.west, chunk.north, chunk.east]
+      .map(value => Number(value).toFixed(7))
+      .join(",");
     return [
       `[out:json][timeout:${timeout}];`,
       `relation(${id})->.boundary;`,
       ".boundary map_to_area -> .searchArea;",
-      ".boundary out body geom;",
       "(",
-      `  way(area.searchArea)[\"highway\"~\"^(${highwayPattern})$\"][\"name\"];`,
-      `  nwr(area.searchArea)[\"amenity\"~\"^(${amenityPattern})$\"][\"name\"];`,
-      "  nwr(area.searchArea)[\"shop\"=\"supermarket\"][\"name\"];",
+      `  way(area.searchArea)(${bbox})[\"highway\"~\"^(${highwayPattern})$\"][\"name\"];`,
+      `  nwr(area.searchArea)(${bbox})[\"amenity\"~\"^(${amenityPattern})$\"][\"name\"];`,
+      `  nwr(area.searchArea)(${bbox})[\"shop\"=\"supermarket\"][\"name\"];`,
       ");",
       "out tags geom;"
     ].join("\n");
@@ -389,12 +442,15 @@
     }
   }
 
-  function processStreetElements(elements, cityId, geometryApi) {
+  function processStreetElements(elements, cityId, geometryApi, profiler) {
     ensureGeometryApi(geometryApi);
     const allowedHighways = new Set(DEFAULT_STREET_HIGHWAY_TYPES);
     const groups = new Map();
     const seenWayIds = new Set();
 
+    const extractionStartedAt = profiler.start();
+    const normalizationStartedAt = profiler.start();
+    const normalizedWays = [];
     for (const element of elements) {
       if (!element || element.type !== "way") continue;
       const osmWayId = validOsmId(element.id);
@@ -406,15 +462,26 @@
       const coordinates = parseWayLine(element);
       if (!coordinates) continue;
       seenWayIds.add(osmWayId);
-
-      if (!groups.has(name)) groups.set(name, []);
-      groups.get(name).push({ element, osmWayId, coordinates });
+      normalizedWays.push({ element, osmWayId, coordinates, name });
     }
+    profiler.increment("streetWaysNormalized", normalizedWays.length);
+    profiler.end("streetNormalizationMs", normalizationStartedAt);
+    const groupingStartedAt = profiler.start();
+    for (const way of normalizedWays) {
+      const { name } = way;
+      if (!groups.has(name)) groups.set(name, []);
+      groups.get(name).push(way);
+    }
+    profiler.end("streetGroupingMs", groupingStartedAt);
+    profiler.end("streetExtractionMs", extractionStartedAt);
 
     const streets = [];
     const usedIds = new Set();
+    let startedAt = profiler.start();
     const sortedNames = [...groups.keys()].sort(compareNames);
+    profiler.end("streetSortingMs", startedAt);
     for (const name of sortedNames) {
+      startedAt = profiler.start();
       const ways = groups.get(name).sort((first, second) => first.osmWayId - second.osmWayId);
       const streetId = createUniqueStreetId(cityId, name, geometryApi, usedIds);
       const aliases = [];
@@ -426,7 +493,9 @@
           aliases.push(alias);
         }
       }
+      profiler.end("streetIdAndAliasMs", startedAt);
 
+      startedAt = profiler.start();
       const features = ways.map(way => ({
         type: "Feature",
         properties: { osm_type: "way", osm_id: way.osmWayId },
@@ -447,10 +516,14 @@
         aliases,
         geometry: {
           type: "MultiLineString",
-          coordinates: merged.sections.map(section => section.map(coordinate => [...coordinate]))
+          // mergeStreetFeatures() returns the locally-created section arrays unchanged.
+          // They have no other owner after this function, so another deep coordinate
+          // copy would only double the normalized geometry temporarily.
+          coordinates: merged.sections
         },
         osmWayIds: [...new Set(ways.map(way => way.osmWayId))].sort((first, second) => first - second)
       });
+      profiler.end("streetGeometryMs", startedAt);
     }
     return streets;
   }
@@ -635,9 +708,11 @@
       : { type: "MultiPolygon", coordinates: polygons };
   }
 
-  function processPoiElements(elements, cityId) {
+  function processPoiElements(elements, cityId, profiler) {
     const seenOsmObjects = new Set();
     const pois = [];
+    const extractionStartedAt = profiler.start();
+    const normalizationStartedAt = profiler.start();
     for (const element of elements) {
       if (!element || !VALID_OSM_TYPES.has(element.type)) continue;
       const osmId = validOsmId(element.id);
@@ -666,12 +741,18 @@
         tags: copyOsmTags(tags)
       });
     }
+    profiler.increment("poisNormalized", pois.length);
+    profiler.end("poiNormalizationMs", normalizationStartedAt);
+    profiler.end("poiExtractionMs", extractionStartedAt);
 
-    return pois.sort((first, second) => (
+    const sortingStartedAt = profiler.start();
+    const sorted = pois.sort((first, second) => (
       compareNames(first.name, second.name)
       || first.osmType.localeCompare(second.osmType)
       || first.osmId - second.osmId
     ));
+    profiler.end("poiSortingMs", sortingStartedAt);
+    return sorted;
   }
 
   function normalizeMunicipalityBounds(bounds) {
@@ -683,6 +764,142 @@
     if ([south, north, west, east].some(value => value === null)) return null;
     if (south < -90 || north > 90 || west < -180 || east > 180 || south > north || west > east) return null;
     return { south, west, north, east };
+  }
+
+  function downloadChunkSize(bounds) {
+    const normalized = normalizeMunicipalityBounds(bounds);
+    if (!normalized) return null;
+    const latitudeKilometers = (normalized.north - normalized.south) * 111.32;
+    const centerLatitudeRadians = ((normalized.south + normalized.north) / 2) * Math.PI / 180;
+    const longitudeKilometers = (normalized.east - normalized.west)
+      * 111.32 * Math.max(0.01, Math.cos(centerLatitudeRadians));
+    return {
+      latitudeKilometers,
+      longitudeKilometers,
+      areaSquareKilometers: latitudeKilometers * longitudeKilometers
+    };
+  }
+
+  function createRootDownloadChunk(bounds) {
+    const normalized = normalizeMunicipalityBounds(bounds);
+    if (!normalized) throw new TypeError("Municipality bounds are required to create a download plan.");
+    return Object.freeze({ id: "root", ...normalized, depth: 0 });
+  }
+
+  function splitDownloadChunk(chunk) {
+    const normalized = normalizeMunicipalityBounds(chunk);
+    if (!normalized || !Number.isInteger(chunk.depth) || chunk.depth < 0) {
+      throw new TypeError("A valid DownloadChunk is required for splitting.");
+    }
+    const middleLatitude = (normalized.south + normalized.north) / 2;
+    const middleLongitude = (normalized.west + normalized.east) / 2;
+    const depth = chunk.depth + 1;
+    return [
+      Object.freeze({ id: `${chunk.id}-sw`, south: normalized.south, west: normalized.west,
+        north: middleLatitude, east: middleLongitude, depth }),
+      Object.freeze({ id: `${chunk.id}-se`, south: normalized.south, west: middleLongitude,
+        north: middleLatitude, east: normalized.east, depth }),
+      Object.freeze({ id: `${chunk.id}-nw`, south: middleLatitude, west: normalized.west,
+        north: normalized.north, east: middleLongitude, depth }),
+      Object.freeze({ id: `${chunk.id}-ne`, south: middleLatitude, west: middleLongitude,
+        north: normalized.north, east: normalized.east, depth })
+    ];
+  }
+
+  function createDownloadPlan(municipality, options = {}) {
+    if (!municipality || typeof municipality !== "object" || Array.isArray(municipality)) {
+      throw new TypeError("Municipality is required to create a download plan.");
+    }
+    const areaThreshold = numericOption(
+      options.areaThresholdSquareKilometers,
+      DOWNLOAD_CHUNK_AREA_THRESHOLD_KM2,
+      1
+    );
+    const maxSpan = numericOption(options.maxSpanKilometers, DOWNLOAD_CHUNK_MAX_SPAN_KM, 1);
+    const maxInitialDepth = Math.floor(numericOption(
+      options.maxInitialDepth,
+      MAX_INITIAL_CHUNK_DEPTH,
+      0
+    ));
+    const rootChunk = createRootDownloadChunk(municipality.bounds);
+    const chunks = [];
+    const pending = [rootChunk];
+
+    while (pending.length > 0) {
+      const chunk = pending.shift();
+      const size = downloadChunkSize(chunk);
+      const tooLarge = size.areaSquareKilometers > areaThreshold
+        || size.latitudeKilometers > maxSpan
+        || size.longitudeKilometers > maxSpan;
+      if (tooLarge && chunk.depth < maxInitialDepth) pending.unshift(...splitDownloadChunk(chunk));
+      else chunks.push(chunk);
+    }
+
+    return Object.freeze({
+      mode: chunks.length === 1 ? "single" : "chunked",
+      chunks: Object.freeze(chunks),
+      boundsSize: Object.freeze(downloadChunkSize(rootChunk))
+    });
+  }
+
+  function osmElementKey(element) {
+    if (!element || !VALID_OSM_TYPES.has(element.type)) return null;
+    const id = validOsmId(element.id);
+    return id === null ? null : `${element.type}:${id}`;
+  }
+
+  function countGeometryPoints(value) {
+    if (!value || typeof value !== "object") return 0;
+    if (Array.isArray(value)) return value.reduce((total, child) => total + countGeometryPoints(child), 0);
+    const ownPoint = validLonLat(value) ? 1 : 0;
+    return ownPoint + Object.entries(value).reduce((total, [key, child]) => (
+      key === "lat" || key === "lon" ? total : total + countGeometryPoints(child)
+    ), 0);
+  }
+
+  function osmElementRichness(element) {
+    const geometryPoints = countGeometryPoints(element.geometry)
+      + countGeometryPoints(element.members);
+    const tagCount = element.tags && typeof element.tags === "object"
+      ? Object.keys(element.tags).length
+      : 0;
+    const hasDirectPosition = validLonLat(element) ? 1 : 0;
+    const hasCenter = validLonLat(element && element.center) ? 1 : 0;
+    return geometryPoints * 1000 + tagCount * 10 + hasDirectPosition + hasCenter;
+  }
+
+  function stableSerialize(value) {
+    if (value === null || typeof value !== "object") return JSON.stringify(value);
+    if (Array.isArray(value)) return `[${value.map(stableSerialize).join(",")}]`;
+    return `{${Object.keys(value).sort().map(key => (
+      `${JSON.stringify(key)}:${stableSerialize(value[key])}`
+    )).join(",")}}`;
+  }
+
+  function preferredOsmElement(first, second) {
+    const richnessDifference = osmElementRichness(second) - osmElementRichness(first);
+    if (richnessDifference > 0) return second;
+    if (richnessDifference < 0) return first;
+    return stableSerialize(second) < stableSerialize(first) ? second : first;
+  }
+
+  function deduplicateOsmElements(elements, profiler = createProfiler(null)) {
+    const startedAt = profiler.start();
+    const byIdentity = new Map();
+    for (const element of Array.isArray(elements) ? elements : []) {
+      const key = osmElementKey(element);
+      if (!key) continue;
+      const existing = byIdentity.get(key);
+      byIdentity.set(key, existing ? preferredOsmElement(existing, element) : element);
+    }
+    const typeOrder = { node: 0, way: 1, relation: 2 };
+    const result = [...byIdentity.values()].sort((first, second) => (
+      typeOrder[first.type] - typeOrder[second.type]
+      || Number(first.id) - Number(second.id)
+    ));
+    profiler.increment("osmObjectsDeduplicated", (Array.isArray(elements) ? elements.length : 0) - result.length);
+    profiler.end("osmDedupeMs", startedAt);
+    return result;
   }
 
   function createCityMetadata(municipality, cityId, streets, pois, timestamp) {
@@ -713,8 +930,10 @@
     };
   }
 
-  function emitProgress(callback, stage, message, progress) {
-    if (callback) callback({ stage, message, progress });
+  function emitProgress(callback, stage, message, progress, details = {}) {
+    // These percentages describe stable workflow phases, not downloaded bytes:
+    // Overpass does not expose byte-level progress for this single request.
+    if (callback) callback({ stage, message, progress, ...details });
   }
 
   function createAbortError(serviceName = "Nominatim") {
@@ -876,6 +1095,24 @@
     const requestIntervalMs = numericOption(options.requestIntervalMs, NOMINATIM_REQUEST_INTERVAL_MS, 0);
     const rawResultLimit = numericOption(options.rawResultLimit, NOMINATIM_RAW_RESULT_LIMIT, 1);
     const resultLimit = numericOption(options.resultLimit, MUNICIPALITY_RESULT_LIMIT, 1);
+    const overpassRetryDelayMs = numericOption(
+      options.overpassRetryDelayMs,
+      OVERPASS_RETRY_DELAY_MS,
+      0
+    );
+    const maxChunkDepth = Math.floor(numericOption(options.maxChunkDepth, MAX_CHUNK_DEPTH, 0));
+    const maxChunkRequests = Math.floor(numericOption(
+      options.maxChunkRequests,
+      MAX_CHUNK_REQUESTS,
+      1
+    ));
+    const downloadPlanFactory = typeof options.downloadPlanFactory === "function"
+      ? options.downloadPlanFactory
+      : municipality => createDownloadPlan(municipality, {
+        areaThresholdSquareKilometers: options.chunkAreaThresholdSquareKilometers,
+        maxSpanKilometers: options.chunkMaxSpanKilometers,
+        maxInitialDepth: options.maxInitialChunkDepth
+      });
     const now = typeof options.now === "function" ? options.now : () => Date.now();
     const delay = typeof options.delay === "function" ? options.delay : defaultDelay;
     const scheduleTimeout = typeof options.setTimeout === "function" ? options.setTimeout : setTimeout;
@@ -906,7 +1143,8 @@
         serviceName,
         method = "GET",
         headers = { Accept: "application/json" },
-        body
+        body,
+        profiler = createProfiler(null)
       } = requestOptions;
       if (!fetchImpl) throw new Error("Fetch API is not available in this environment.");
       if (typeof AbortControllerImpl !== "function") {
@@ -956,7 +1194,10 @@
             throw error;
           }
           try {
-            return await response.json();
+            const jsonStartedAt = profiler.start();
+            const parsed = await response.json();
+            profiler.end(`${serviceName.toLocaleLowerCase("en-US")}ResponseJsonMs`, jsonStartedAt);
+            return parsed;
           } catch (cause) {
             const error = new Error(`Invalid JSON response received from ${serviceName}.`);
             error.name = "InvalidResponseError";
@@ -1000,13 +1241,85 @@
       return normalizeSearchResults(rawResults, query, resultLimit);
     }
 
+    function isRetryableOverpassError(error) {
+      if (!error || error.code === "ABORTED") return false;
+      if (error.code === "NETWORK_ERROR" || error.code === "TIMEOUT") return true;
+      return error.code === "HTTP_ERROR" && [429, 500, 502, 503, 504].includes(Number(error.status));
+    }
+
+    function createChunkRequestLimitError() {
+      const error = new Error(`Overpass chunk request limit of ${maxChunkRequests} was reached.`);
+      error.name = "DownloadLimitError";
+      error.code = "CHUNK_REQUEST_LIMIT";
+      return error;
+    }
+
+    function validateOverpassData(rawData) {
+      if (!rawData || typeof rawData !== "object" || Array.isArray(rawData) || !Array.isArray(rawData.elements)) {
+        const error = new Error("Invalid response received from Overpass.");
+        error.name = "InvalidResponseError";
+        error.code = "INVALID_RESPONSE";
+        throw error;
+      }
+      return rawData.elements;
+    }
+
+    async function fetchOverpassElements(query, requestOptions) {
+      const { signal, diagnostics, requestKind, onProgress, profiler } = requestOptions;
+      const body = new URLSearchParams({ data: query }).toString();
+      for (let attempt = 0; attempt <= MAX_DOWNLOAD_RETRIES; attempt += 1) {
+        throwIfAborted(signal, "Overpass");
+        if (requestKind === "chunk" && diagnostics.chunkRequests >= maxChunkRequests) {
+          throw createChunkRequestLimitError();
+        }
+        diagnostics.requests += 1;
+        if (requestKind === "chunk") diagnostics.chunkRequests += 1;
+        else diagnostics.boundaryRequests += 1;
+        try {
+          const rawData = await fetchJsonWithTimeout(overpassEndpoint, {
+            signal,
+            timeout: overpassTimeoutMs,
+            serviceName: "Overpass",
+            method: "POST",
+            headers: {
+              Accept: "application/json",
+              "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8"
+            },
+            body,
+            profiler
+          });
+          return validateOverpassData(rawData);
+        } catch (error) {
+          if (!isRetryableOverpassError(error) || attempt >= MAX_DOWNLOAD_RETRIES) {
+            if (isRetryableOverpassError(error)) {
+              try { error.retryExhausted = true; } catch (_) {}
+            }
+            throw error;
+          }
+          diagnostics.retries += 1;
+          emitProgress(
+            onProgress,
+            "waiting-for-retry",
+            requestKind === "boundary"
+              ? "Die Gemeindegrenze wird gleich erneut angefragt …"
+              : "Ein Stadtbereich wird gleich erneut angefragt …",
+            15
+          );
+          await delay(overpassRetryDelayMs, signal);
+        }
+      }
+      throw new Error("Unreachable Overpass retry state.");
+    }
+
     async function fetchCityData(municipality, downloadOptions = {}) {
+      const totalStartedAt = monotonicNow();
       const municipalityInfo = validateMunicipalityForDownload(municipality);
       if (!downloadOptions || typeof downloadOptions !== "object" || Array.isArray(downloadOptions)) {
         throw new TypeError("Download options must be an object.");
       }
       const signal = downloadOptions.signal;
       const onProgress = downloadOptions.onProgress;
+      const profiler = createProfiler(downloadOptions.diagnostics);
       if (signal !== undefined && (!signal || typeof signal.addEventListener !== "function")) {
         throw new TypeError("options.signal must be an AbortSignal.");
       }
@@ -1016,34 +1329,106 @@
 
       throwIfAborted(signal, "Overpass");
       const cityId = `osm-relation-${municipalityInfo.osmId}`;
+      const diagnostics = {
+        strategy: "pending",
+        initialChunks: 0,
+        requests: 0,
+        boundaryRequests: 0,
+        chunkRequests: 0,
+        retries: 0,
+        splits: 0,
+        successfulChunks: 0,
+        rawObjectsBeforeDeduplication: 0,
+        rawObjectsAfterDeduplication: 0,
+        finalStreets: 0,
+        finalPois: 0
+      };
       emitProgress(onProgress, "preparing", "Gemeindedownload wird vorbereitet …", 5);
-      const query = buildOverpassQuery(municipalityInfo.osmId, overpassQueryTimeoutSeconds);
-      const body = new URLSearchParams({ data: query }).toString();
+      emitProgress(onProgress, "requesting-boundary", "Gemeindegrenze wird geladen …", 10);
+      const boundaryElements = await fetchOverpassElements(
+        buildBoundaryQuery(municipalityInfo.osmId, overpassQueryTimeoutSeconds),
+        {
+          signal,
+          diagnostics,
+          requestKind: "boundary",
+          onProgress,
+          profiler
+        }
+      );
+      throwIfAborted(signal, "Overpass");
+      let processingStartedAt = profiler.start();
+      const boundary = buildMunicipalityBoundary(boundaryElements, municipalityInfo.osmId);
+      profiler.end("boundaryProcessingMs", processingStartedAt);
 
-      emitProgress(onProgress, "requesting-overpass", "Straßen und Einrichtungen werden geladen …", 20);
-      const rawData = await fetchJsonWithTimeout(overpassEndpoint, {
-        signal,
-        timeout: overpassTimeoutMs,
-        serviceName: "Overpass",
-        method: "POST",
-        headers: {
-          Accept: "application/json",
-          "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8"
-        },
-        body
-      });
-      if (!rawData || typeof rawData !== "object" || Array.isArray(rawData) || !Array.isArray(rawData.elements)) {
-        const error = new Error("Invalid response received from Overpass.");
-        error.name = "InvalidResponseError";
-        error.code = "INVALID_RESPONSE";
-        throw error;
+      // The boundary is deliberately loaded exactly once before the generic,
+      // bounds-based DownloadChunk plan is selected. Chunk requests only load
+      // streets and POIs; they never repeat the boundary query.
+      const plan = downloadPlanFactory(municipality);
+      if (!plan || !Array.isArray(plan.chunks) || plan.chunks.length === 0) {
+        throw new Error("Download plan did not provide any chunks.");
+      }
+      diagnostics.strategy = plan.mode === "chunked" ? "chunked" : "single";
+      diagnostics.initialChunks = plan.chunks.length;
+
+      const pendingChunks = [...plan.chunks];
+      const rawElements = [];
+      while (pendingChunks.length > 0) {
+        throwIfAborted(signal, "Overpass");
+        const chunk = pendingChunks.shift();
+        const completedBefore = diagnostics.successfulChunks;
+        emitProgress(
+          onProgress,
+          "requesting-overpass",
+          `Stadtdaten werden geladen … ${completedBefore} Bereiche abgeschlossen, ${pendingChunks.length + 1} ausstehend.`,
+          20,
+          { completedAreas: completedBefore, pendingAreas: pendingChunks.length + 1 }
+        );
+        try {
+          const chunkElements = await fetchOverpassElements(
+            buildChunkDataQuery(municipalityInfo.osmId, chunk, overpassQueryTimeoutSeconds),
+            {
+              signal,
+              diagnostics,
+              requestKind: "chunk",
+              onProgress,
+              profiler
+            }
+          );
+          throwIfAborted(signal, "Overpass");
+          processingStartedAt = profiler.start();
+          rawElements.push(...chunkElements);
+          profiler.end("chunkRawCollectionMs", processingStartedAt);
+          profiler.increment("chunkRawObjectsCollected", chunkElements.length);
+          diagnostics.successfulChunks += 1;
+          emitProgress(
+            onProgress,
+            "chunk-completed",
+            `Stadtdaten werden geladen … ${diagnostics.successfulChunks} Bereiche abgeschlossen, ${pendingChunks.length} ausstehend.`,
+            20,
+            { completedAreas: diagnostics.successfulChunks, pendingAreas: pendingChunks.length }
+          );
+        } catch (error) {
+          if (!isRetryableOverpassError(error) || chunk.depth >= maxChunkDepth) throw error;
+          const children = splitDownloadChunk(chunk);
+          diagnostics.splits += 1;
+          pendingChunks.unshift(...children);
+          emitProgress(
+            onProgress,
+            "splitting-area",
+            `Ein großer Stadtbereich wird kleiner aufgeteilt. ${diagnostics.successfulChunks} Bereiche abgeschlossen, ${pendingChunks.length} ausstehend.`,
+            20,
+            { completedAreas: diagnostics.successfulChunks, pendingAreas: pendingChunks.length }
+          );
+        }
       }
 
       throwIfAborted(signal, "Overpass");
-      emitProgress(onProgress, "processing-response", "Overpass-Antwort wird verarbeitet …", 50);
-      const boundary = buildMunicipalityBoundary(rawData.elements, municipalityInfo.osmId);
+      diagnostics.rawObjectsBeforeDeduplication = rawElements.length;
+      const deduplicatedElements = deduplicateOsmElements(rawElements, profiler);
+      diagnostics.rawObjectsAfterDeduplication = deduplicatedElements.length;
+      emitProgress(onProgress, "processing-response", "Overpass-Antworten werden zusammengeführt …", 50);
       emitProgress(onProgress, "processing-streets", "Straßen werden verarbeitet …", 65);
-      const streets = processStreetElements(rawData.elements, cityId, geometryApi);
+      const streets = processStreetElements(deduplicatedElements, cityId, geometryApi, profiler);
       if (streets.length === 0) {
         const error = new Error(`No playable streets were found for municipality "${municipalityInfo.name}".`);
         error.name = "NoStreetsError";
@@ -1053,13 +1438,19 @@
 
       throwIfAborted(signal, "Overpass");
       emitProgress(onProgress, "processing-pois", "Einrichtungen werden verarbeitet …", 82);
-      const pois = processPoiElements(rawData.elements, cityId);
+      const pois = processPoiElements(deduplicatedElements, cityId, profiler);
+      diagnostics.finalStreets = streets.length;
+      diagnostics.finalPois = pois.length;
       throwIfAborted(signal, "Overpass");
       emitProgress(onProgress, "finalizing", `${streets.length} Straßen und ${pois.length} Einrichtungen gefunden.`, 95);
 
       const timestamp = new Date(now()).toISOString();
       const city = createCityMetadata(municipality, cityId, streets, pois, timestamp);
-      const result = { city, streets, pois, boundary };
+      if (profiler.enabled) {
+        downloadOptions.diagnostics.timingsMs.totalFetchCityDataMs = monotonicNow() - totalStartedAt;
+        profiler.finish();
+      }
+      const result = { city, streets, pois, boundary, downloadDiagnostics: diagnostics };
       emitProgress(onProgress, "completed", "Download abgeschlossen.", 100);
       return result;
     }
@@ -1098,8 +1489,18 @@
     OVERPASS_API_URL,
     OVERPASS_TIMEOUT_MS,
     OVERPASS_QUERY_TIMEOUT_SECONDS,
+    OVERPASS_RETRY_DELAY_MS,
+    MAX_DOWNLOAD_RETRIES,
+    DOWNLOAD_CHUNK_AREA_THRESHOLD_KM2,
+    DOWNLOAD_CHUNK_MAX_SPAN_KM,
+    MAX_INITIAL_CHUNK_DEPTH,
+    MAX_CHUNK_DEPTH,
+    MAX_CHUNK_REQUESTS,
     DEFAULT_STREET_HIGHWAY_TYPES,
     POI_CATEGORY_DEFINITIONS,
+    createDownloadPlan,
+    splitDownloadChunk,
+    deduplicateOsmElements,
     createOsmService,
     searchMunicipalities: defaultInstance.searchMunicipalities,
     fetchCityData: defaultInstance.fetchCityData

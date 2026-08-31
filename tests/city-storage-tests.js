@@ -406,9 +406,9 @@ function createMemoryStorage(initial = {}) {
   };
 }
 
-function createTestHarness() {
+function createTestHarness(options = {}) {
   const idb = new MockIDBFactory();
-  const storage = createMemoryStorage();
+  const storage = options.storage || createMemoryStorage();
   const cityStorage = createCityStorage({
     dbName: "test-strassentrainer-db",
     dbVersion: 1,
@@ -549,8 +549,11 @@ const poisB = [
   // Test 2 – Stadt speichern und laden
   {
     const { cityStorage } = createTestHarness();
-    const saved = await cityStorage.saveCity(cityA, streetsA, poisA);
+    const saveDiagnostics = {};
+    const saved = await cityStorage.saveCity(cityA, streetsA, poisA, { diagnostics: saveDiagnostics });
     assert.equal(saved.id, cityA.id);
+    assert.ok(saveDiagnostics.timingsMs.saveCityMs >= 0,
+      "Optionale Save-Diagnostik muss die vollständige Transaktionsdauer melden.");
 
     const loaded = await cityStorage.getCity(cityA.id);
     assert.ok(loaded, "Stadt muss geladen werden können.");
@@ -558,6 +561,11 @@ const poisB = [
     assert.equal(loaded.name, "Oberasbach");
     assert.equal(loaded.displayName, "Oberasbach");
     assert.deepEqual(loaded.postalCodes, ["90522"]);
+    const readDiagnostics = {};
+    const bundle = await cityStorage.getCityData(cityA.id, { diagnostics: readDiagnostics });
+    assert.equal(bundle.streets.length, streetsA.length);
+    assert.ok(readDiagnostics.timingsMs.indexedDbReadMs >= 0,
+      "Optionale Read-Diagnostik muss die vollständige Readonly-Transaktion messen.");
   }
 
   // Test 3 – Straßengeometrie bleibt verlustfrei erhalten
@@ -693,6 +701,91 @@ const poisB = [
     assert.equal(dataA.pois.length, 2);
     assert.ok(dataA.streets.every(s => s.cityId === cityA.id));
     assert.ok(dataA.pois.every(p => p.cityId === cityA.id));
+  }
+
+  // Test 11a – getCityData() liest ein vollständiges Stadtpaket in einer Readonly-Transaktion
+  {
+    const { cityStorage } = createTestHarness();
+    await cityStorage.saveCity(cityA, streetsA, poisA);
+    await cityStorage.saveCity(cityB, streetsB, poisB);
+    const db = await cityStorage.openDatabase();
+    const originalTransaction = db.transaction.bind(db);
+    const readTransactions = [];
+    db.transaction = (storeNames, mode = "readonly") => {
+      if (Array.isArray(storeNames)
+        && storeNames.includes(STORE_CITIES)
+        && storeNames.includes(STORE_STREETS)
+        && storeNames.includes(STORE_POIS)) {
+        readTransactions.push({ storeNames: [...storeNames], mode });
+      }
+      return originalTransaction(storeNames, mode);
+    };
+
+    const dataA = await cityStorage.getCityData(cityA.id);
+    assert.ok(dataA);
+    assert.equal(dataA.city.id, cityA.id);
+    assert.deepEqual(dataA.streets.map(street => street.id).sort(),
+      streetsA.map(street => street.id).sort());
+    assert.deepEqual(dataA.pois.map(poi => poi.id).sort(),
+      poisA.map(poi => poi.id).sort());
+    assert.ok(dataA.streets.every(street => street.cityId === cityA.id));
+    assert.ok(dataA.pois.every(poi => poi.cityId === cityA.id));
+    assert.deepEqual(readTransactions, [{
+      storeNames: [STORE_CITIES, STORE_STREETS, STORE_POIS],
+      mode: "readonly"
+    }], "Metadaten, Straßen und POIs müssen aus genau einer gemeinsamen Readonly-Transaktion stammen");
+  }
+
+  // Test 11b – getCityData() liefert für unbekannte oder ungültige IDs null
+  {
+    const { cityStorage } = createTestHarness();
+    await cityStorage.saveCity(cityA, streetsA, poisA);
+    assert.equal(await cityStorage.getCityData("nicht-installiert"), null);
+    assert.equal(await cityStorage.getCityData(""), null);
+    assert.equal(await cityStorage.getCityData("   "), null);
+    assert.equal(await cityStorage.getCityData(null), null);
+  }
+
+  // Test 11c – Unveränderte veraltete Active-ID wird nach atomarer Paketabfrage bereinigt
+  {
+    const staleCityId = "osm-relation-nicht-mehr-vorhanden";
+    const storage = createMemoryStorage({ "test-active-city-v1": staleCityId });
+    const { cityStorage } = createTestHarness({ storage });
+    assert.equal(cityStorage.getActiveCityId(), staleCityId);
+    assert.equal(await cityStorage.getActiveCityData(), null);
+    assert.equal(cityStorage.getActiveCityId(), null,
+      "Eine weiterhin unveränderte veraltete Active-ID muss entfernt werden");
+  }
+
+  // Test 11d – Parallel neu gesetzte Active-ID wird nicht von einer veralteten Abfrage gelöscht
+  {
+    const staleCityId = "osm-relation-nicht-mehr-vorhanden";
+    const activeStorageKey = "test-active-city-v1";
+    const memoryStorage = createMemoryStorage({ [activeStorageKey]: staleCityId });
+    let activeIdReads = 0;
+    const raceStorage = {
+      ...memoryStorage,
+      getItem(key) {
+        if (key === activeStorageKey) {
+          activeIdReads += 1;
+          if (activeIdReads === 2) memoryStorage.setItem(key, cityB.id);
+        }
+        return memoryStorage.getItem(key);
+      }
+    };
+    const { cityStorage } = createTestHarness({ storage: raceStorage });
+    await cityStorage.saveCity(cityB, streetsB, poisB);
+
+    const staleResult = await cityStorage.getActiveCityData();
+    assert.equal(staleResult, null,
+      "Die laufende Abfrage darf nicht stillschweigend Daten einer inzwischen anderen Active-ID liefern");
+    assert.equal(cityStorage.getActiveCityId(), cityB.id,
+      "Eine parallel neu gesetzte Active-ID darf durch die Bereinigung des alten Requests nicht verloren gehen");
+
+    const currentResult = await cityStorage.getActiveCityData();
+    assert.equal(currentResult.city.id, cityB.id);
+    assert.equal(currentResult.streets.length, streetsB.length);
+    assert.equal(currentResult.pois.length, poisB.length);
   }
 
   // Test 12 – Stadt löschen (Metadaten, Straßen, POIs)
@@ -1003,6 +1096,8 @@ const poisB = [
   console.log("- Aktive Stadt setzen, wechseln, löschen und verifizieren");
   console.log("- Abweisung nicht existierender aktiver Städte");
   console.log("- Vollständige Datenbündel über getActiveCityData()");
+  console.log("- Atomare Datenbündel beliebiger Städte über getCityData() in einer Readonly-Transaktion");
+  console.log("- Race-sichere Bereinigung veralteter Active-IDs ohne Verlust einer neueren Auswahl");
   console.log("- Löschen einer Stadt entfernt Metadaten, Straßen und POIs rückstandsfrei");
   console.log("- Andere Städte bleiben beim Löschen und Aktualisieren unberührt");
   console.log("- Aktualisieren einer Stadt bereinigt veraltete Datensätze vollständig");
@@ -1016,4 +1111,3 @@ const poisB = [
   console.error("Testfehler in city-storage-tests:", error);
   process.exit(1);
 });
-

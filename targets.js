@@ -8,49 +8,82 @@
   const TARGET_TYPES = Object.freeze({ STREET: "street", POI: "poi" });
 
   function prepareStreetTargets(rawStreets, geometryApi) {
-    return geometryApi.prepareStreetRecords(rawStreets).map(street => ({
-      ...street,
-      targetType: TARGET_TYPES.STREET,
-      category: "street",
-      categoryLabel: "Straße",
-      subcategory: null,
-      geometry: null,
-      active: true,
-      quizEligible: true,
-      needsReview: false
-    }));
+    const sourceStreets = Array.isArray(rawStreets) ? rawStreets : [];
+    return geometryApi.prepareStreetRecords(sourceStreets).map((street, index) => {
+      const rawStreet = sourceStreets[index] || {};
+      let geometry = null;
+      if (geometryApi.isValidStreetGeometry(rawStreet.geometry, street.id)) {
+        geometry = rawStreet.geometry;
+      } else {
+        const sections = typeof geometryApi.extractLineSections === "function"
+          ? geometryApi.extractLineSections(rawStreet.geometry)
+          : [];
+        if (sections.length > 0) {
+          geometry = {
+            streetId: street.id,
+            displayName: street.displayName,
+            type: "MultiLineString",
+            sections,
+            source: rawStreet.source || "indexeddb",
+            featureIds: Array.isArray(rawStreet.osmWayIds)
+              ? rawStreet.osmWayIds.map(id => `way/${id}`)
+              : [],
+            sourceGeometryTypes: rawStreet.geometry?.type ? [rawStreet.geometry.type] : []
+          };
+        }
+      }
+
+      return {
+        ...street,
+        cityId: rawStreet.cityId || null,
+        targetType: TARGET_TYPES.STREET,
+        category: "street",
+        categoryLabel: "Straße",
+        subcategory: null,
+        geometry,
+        active: rawStreet.active !== false,
+        quizEligible: rawStreet.quizEligible !== false,
+        needsReview: Boolean(rawStreet.needsReview)
+      };
+    });
   }
 
   function preparePoiTargets(rawPois, categories = []) {
     const labels = new Map(categories.map(category => [category.id, category.label]));
-    return (Array.isArray(rawPois) ? rawPois : []).map(rawPoi => ({
-      id: String(rawPoi.id || ""),
-      displayName: String(rawPoi.displayName || "").trim(),
-      aliases: [...new Set(rawPoi.aliases || [])],
-      targetType: TARGET_TYPES.POI,
-      category: String(rawPoi.category || "other-relevant"),
-      categoryLabel: rawPoi.categoryLabel
-        || labels.get(rawPoi.category)
-        || String(rawPoi.category || "Ort"),
-      subcategory: rawPoi.subcategory || null,
-      latitude: Number(rawPoi.latitude),
-      longitude: Number(rawPoi.longitude),
-      address: rawPoi.address || null,
-      geometry: rawPoi.geometry || {
-        type: "Point",
-        coordinates: [Number(rawPoi.longitude), Number(rawPoi.latitude)]
-      },
-      active: rawPoi.active !== false,
-      quizEligible: rawPoi.quizEligible !== false,
-      source: rawPoi.source || null,
-      sourceUrl: rawPoi.sourceUrl || null,
-      geometryScope: rawPoi.geometryScope || "point",
-      geometrySource: rawPoi.geometrySource || null,
-      geometrySourceUrl: rawPoi.geometrySourceUrl || null,
-      geometryCheckedAt: rawPoi.geometryCheckedAt || null,
-      needsReview: Boolean(rawPoi.needsReview),
-      reviewNote: rawPoi.reviewNote || null
-    }));
+    return (Array.isArray(rawPois) ? rawPois : []).map(rawPoi => {
+      const latitude = Number(rawPoi.latitude ?? rawPoi.position?.lat);
+      const longitude = Number(rawPoi.longitude ?? rawPoi.position?.lon);
+      const category = String(rawPoi.category || "other-relevant");
+      return {
+        id: String(rawPoi.id || ""),
+        cityId: rawPoi.cityId || null,
+        displayName: String(rawPoi.displayName || rawPoi.name || "").trim(),
+        aliases: [...new Set(Array.isArray(rawPoi.aliases) ? rawPoi.aliases : [])],
+        targetType: TARGET_TYPES.POI,
+        category,
+        categoryLabel: rawPoi.categoryLabel
+          || labels.get(category)
+          || category,
+        subcategory: rawPoi.subcategory || null,
+        latitude,
+        longitude,
+        address: rawPoi.address || null,
+        geometry: rawPoi.geometry || {
+          type: "Point",
+          coordinates: [longitude, latitude]
+        },
+        active: rawPoi.active !== false,
+        quizEligible: rawPoi.quizEligible !== false,
+        source: rawPoi.source || null,
+        sourceUrl: rawPoi.sourceUrl || null,
+        geometryScope: rawPoi.geometryScope || "point",
+        geometrySource: rawPoi.geometrySource || null,
+        geometrySourceUrl: rawPoi.geometrySourceUrl || null,
+        geometryCheckedAt: rawPoi.geometryCheckedAt || null,
+        needsReview: Boolean(rawPoi.needsReview),
+        reviewNote: rawPoi.reviewNote || null
+      };
+    });
   }
 
   function isFiniteCoordinate(coordinate) {

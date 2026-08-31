@@ -3,8 +3,12 @@
 const assert = require("assert");
 const {
   STATISTICS_SCHEMA_VERSION,
+  STATISTICS_EXPORT_SCHEMA_VERSION,
   HIT_THRESHOLDS_METERS,
   createStatisticsStore,
+  getStatisticsStorageKey,
+  createCitySlug,
+  getStatisticsExportFilename,
   parseStatisticsJson
 } = require("../statistics.js");
 
@@ -35,7 +39,19 @@ function result(overrides) {
 }
 
 assert.equal(STATISTICS_SCHEMA_VERSION, 2);
+assert.equal(STATISTICS_EXPORT_SCHEMA_VERSION, 1);
 assert.deepEqual(HIT_THRESHOLDS_METERS, { street: 100, poi: 100 });
+assert.equal(
+  getStatisticsStorageKey("osm-relation-12345"),
+  "strassentrainer-statistik-osm-relation-12345-v2"
+);
+assert.notEqual(getStatisticsStorageKey("same-name-a"), getStatisticsStorageKey("same-name-b"));
+assert.throws(() => getStatisticsStorageKey("  "), /Stadt-ID/);
+assert.equal(createCitySlug("München-Süd / Weiß"), "muenchen-sued-weiss");
+assert.equal(
+  getStatisticsExportFilename("München-Süd / Weiß", "2026-08-28T12:00:00.000Z"),
+  "strassentrainer-statistik-muenchen-sued-weiss-2026-08-28.json"
+);
 
 const storage = createMemoryStorage();
 const store = createStatisticsStore(storage, "statistics-test");
@@ -225,6 +241,59 @@ assert.equal(migratedStore.getSnapshot().overall.gamesStarted, 2);
 assert.equal(migratedStore.getSnapshot().overall.gamesCompleted, 1);
 assert.equal(migratedStore.getSnapshot().overall.roundsEvaluated, 4);
 
+const cityStorage = createMemoryStorage();
+const alphaStore = createStatisticsStore(
+  cityStorage,
+  getStatisticsStorageKey("osm-relation-alpha"),
+  { cityId: "osm-relation-alpha", cityName: "Gleiche Stadt" }
+);
+const betaStore = createStatisticsStore(
+  cityStorage,
+  getStatisticsStorageKey("osm-relation-beta"),
+  { cityId: "osm-relation-beta", cityName: "Gleiche Stadt" }
+);
+alphaStore.recordRound(result({ resultId: "alpha-main", targetId: "main-street",
+  targetName: "Hauptstraße" }), { roundId: "alpha-main" });
+betaStore.recordRound(result({ resultId: "beta-main", targetId: "main-street",
+  targetName: "Hauptstraße", points: 250 }), { roundId: "beta-main" });
+assert.equal(alphaStore.getSnapshot().overall.totalPoints, 800);
+assert.equal(betaStore.getSnapshot().overall.totalPoints, 250,
+  "Gleiche Stadt- und Straßennamen dürfen verschiedene cityId-Stores nicht vermischen");
+
+const alphaBeforeExport = alphaStore.getSnapshot();
+const alphaExport = JSON.parse(alphaStore.exportJson());
+assert.deepEqual(alphaStore.getSnapshot(), alphaBeforeExport,
+  "Ein Export darf die Statistik nicht verändern");
+assert.equal(alphaExport.schemaVersion, 1);
+assert.equal(alphaExport.cityId, "osm-relation-alpha");
+assert.equal(alphaExport.cityName, "Gleiche Stadt");
+assert.ok(Number.isFinite(Date.parse(alphaExport.exportedAt)));
+assert.equal(alphaExport.statistics.overall.roundsEvaluated, 1);
+const betaBeforeRejectedImport = betaStore.getSnapshot();
+assert.throws(
+  () => betaStore.importJson(JSON.stringify(alphaExport), "replace"),
+  /Diese Statistik gehört zu Gleiche Stadt \(osm-relation-alpha\)\. Aktuelle Stadt: Gleiche Stadt \(osm-relation-beta\)\./
+);
+assert.deepEqual(betaStore.getSnapshot(), betaBeforeRejectedImport,
+  "Ein Stadt-Mismatch darf den aktiven Store nicht teilweise verändern");
+assert.throws(
+  () => betaStore.importJson(JSON.stringify({ ...alphaExport, schemaVersion: 99 }), "replace"),
+  /Version des Statistikexports/
+);
+assert.throws(
+  () => betaStore.importJson(JSON.stringify(alphaExport.statistics), "replace"),
+  /keine Stadtzuordnung/
+);
+
+const legacyOberasbachStore = createStatisticsStore(
+  createMemoryStorage(),
+  "oberasbach-strassentrainer-statistik-v1",
+  { cityId: "legacy-oberasbach", cityName: "Oberasbach", allowLegacyImport: true }
+);
+legacyOberasbachStore.importJson(JSON.stringify(alphaExport.statistics), "replace");
+assert.equal(legacyOberasbachStore.getSnapshot().overall.roundsEvaluated, 1,
+  "Nur der Legacy-Oberasbach-Store akzeptiert alte Exporte ohne cityId");
+
 console.log("Statistiktests erfolgreich:");
 console.log("- leerer Speicher, mehrere freie Runden und exakte Summen/Durchschnitte");
 console.log("- Filter für Modus und Zieltyp sowie deterministische Zielrangfolge");
@@ -232,3 +301,5 @@ console.log("- Timeout, Abbruch und erst nach Abschluss aggregierte Prüfung");
 console.log("- Deduplizierung von Runden und fertigen Prüfungen");
 console.log("- Export, Reset, Ersetzen, Zusammenführen und Neuladen");
 console.log("- verständliche Ablehnung beschädigter Daten und Migration von Schema 1");
+console.log("- cityId-basierte Keys, sichere Dateinamen und getrennte gleichnamige Ziele");
+console.log("- stadtbezogener Export, atomare Importprüfung und Legacy-Oberasbach-Kompatibilität");

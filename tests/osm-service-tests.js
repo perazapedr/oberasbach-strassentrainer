@@ -11,6 +11,13 @@ const {
   OVERPASS_API_URL,
   OVERPASS_TIMEOUT_MS,
   OVERPASS_QUERY_TIMEOUT_SECONDS,
+  OVERPASS_RETRY_DELAY_MS,
+  MAX_DOWNLOAD_RETRIES,
+  DOWNLOAD_CHUNK_AREA_THRESHOLD_KM2,
+  DOWNLOAD_CHUNK_MAX_SPAN_KM,
+  MAX_INITIAL_CHUNK_DEPTH,
+  MAX_CHUNK_DEPTH,
+  MAX_CHUNK_REQUESTS,
   DEFAULT_STREET_HIGHWAY_TYPES,
   POI_CATEGORY_DEFINITIONS,
   createOsmService
@@ -155,6 +162,7 @@ function createCityService(elements, options = {}) {
       requestIntervalMs: 0,
       timeoutMs: 100,
       overpassTimeoutMs: 100,
+      overpassRetryDelayMs: 0,
       now: () => Date.UTC(2026, 7, 27, 12, 0, 0),
       ...options
     })
@@ -171,6 +179,13 @@ test("zentrale Nominatim-Konfiguration", async () => {
   assert.equal(OVERPASS_API_URL, "https://overpass-api.de/api/interpreter");
   assert.equal(OVERPASS_TIMEOUT_MS, 120000);
   assert.equal(OVERPASS_QUERY_TIMEOUT_SECONDS, 90);
+  assert.equal(OVERPASS_RETRY_DELAY_MS, 1200);
+  assert.equal(MAX_DOWNLOAD_RETRIES, 1);
+  assert.equal(DOWNLOAD_CHUNK_AREA_THRESHOLD_KM2, 120);
+  assert.equal(DOWNLOAD_CHUNK_MAX_SPAN_KM, 30);
+  assert.equal(MAX_INITIAL_CHUNK_DEPTH, 2);
+  assert.equal(MAX_CHUNK_DEPTH, 3);
+  assert.equal(MAX_CHUNK_REQUESTS, 96);
   assert.deepEqual(DEFAULT_STREET_HIGHWAY_TYPES, [
     "residential", "living_street", "unclassified", "tertiary", "secondary", "primary"
   ]);
@@ -594,22 +609,22 @@ test("fetchCityData validiert Progress-Callback und AbortSignal", async () => {
   assert.equal(calls.length, 0);
 });
 
-test("Overpass-Query verwendet Relation, map_to_area und keine Bounding Box", async () => {
+test("Boundary und Daten werden getrennt geladen; Datenquery kombiniert Area und Chunk-Bounds", async () => {
   const { service, calls } = createCityService([streetWay(1)], { overpassQueryTimeoutSeconds: 77 });
   await service.fetchCityData(municipality());
-  assert.equal(calls.length, 1);
-  assert.equal(calls[0].url, OVERPASS_API_URL);
-  assert.equal(calls[0].options.method, "POST");
-  assert.match(calls[0].options.headers["Content-Type"], /application\/x-www-form-urlencoded/);
-  const query = new URLSearchParams(calls[0].options.body).get("data");
-  assert.match(query, /\[out:json\]\[timeout:77\]/);
-  assert.match(query, /relation\(1016396\)->\.boundary/);
-  assert.match(query, /\.boundary map_to_area -> \.searchArea/);
-  assert.match(query, /\.boundary out body geom/);
-  assert.match(query, /way\(area\.searchArea\)/);
-  assert.match(query, /nwr\(area\.searchArea\)/);
-  assert.match(query, /out tags geom/);
-  assert.doesNotMatch(query, /49\.4017|10\.9384/);
+  assert.equal(calls.length, 2);
+  assert.ok(calls.every(call => call.url === OVERPASS_API_URL && call.options.method === "POST"));
+  const boundaryQuery = new URLSearchParams(calls[0].options.body).get("data");
+  const dataQuery = new URLSearchParams(calls[1].options.body).get("data");
+  assert.match(boundaryQuery, /\[out:json\]\[timeout:77\]/);
+  assert.match(boundaryQuery, /relation\(1016396\)/);
+  assert.match(boundaryQuery, /out body geom/);
+  assert.doesNotMatch(boundaryQuery, /map_to_area|highway|amenity/);
+  assert.match(dataQuery, /relation\(1016396\)->\.boundary/);
+  assert.match(dataQuery, /\.boundary map_to_area -> \.searchArea/);
+  assert.match(dataQuery, /way\(area\.searchArea\)\(49\.4017000,10\.9384000,49\.4454000,10\.9987000\)/);
+  assert.match(dataQuery, /nwr\(area\.searchArea\)/);
+  assert.match(dataQuery, /out tags geom/);
 });
 
 test("geteilte Relations-Ways werden zur echten Gemeindegrenze zusammengesetzt", async () => {
@@ -949,7 +964,7 @@ test("Gemeinde mit Straßen und null POIs ist zulässig", async () => {
   assert.equal(result.city.poiCount, 0);
 });
 
-for (const status of [429, 500, 504]) {
+for (const status of [429, 500, 502, 503, 504]) {
   test(`Overpass HTTP ${status} wird kontrolliert gemeldet`, async () => {
     const { service } = createCityService([], { fetch: async () => responseWith({}, status) });
     await assert.rejects(service.fetchCityData(municipality()), error => (
@@ -1027,15 +1042,18 @@ test("Progress-Callback erhält stabile grobe Phasen einschließlich completed",
   await service.fetchCityData(municipality(), { onProgress: event => progressEvents.push(event) });
   assert.deepEqual(progressEvents.map(event => event.stage), [
     "preparing",
+    "requesting-boundary",
     "requesting-overpass",
+    "chunk-completed",
     "processing-response",
     "processing-streets",
     "processing-pois",
     "finalizing",
     "completed"
   ]);
-  assert.deepEqual(progressEvents.map(event => event.progress), [5, 20, 50, 65, 82, 95, 100]);
+  assert.deepEqual(progressEvents.map(event => event.progress), [5, 10, 20, 20, 50, 65, 82, 95, 100]);
   assert.ok(progressEvents.every(event => typeof event.message === "string" && event.message.length > 0));
+  assert.match(progressEvents[2].message, /Bereiche abgeschlossen.*ausstehend/);
 });
 
 test("fetchCityData funktioniert ohne Progress-Callback", async () => {

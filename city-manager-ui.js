@@ -1,10 +1,13 @@
 (function initializeCityManager(root, factory) {
   "use strict";
 
-  const api = factory(root);
+  const commonJsPackage = typeof module === "object" && module.exports && typeof require === "function"
+    ? require("./city-package.js")
+    : null;
+  const api = factory(root, commonJsPackage);
   if (typeof module === "object" && module.exports) module.exports = api;
   if (root) root.StrassentrainerCityManager = api;
-})(typeof globalThis !== "undefined" ? globalThis : this, function createCityManagerApi(root) {
+})(typeof globalThis !== "undefined" ? globalThis : this, function createCityManagerApi(root, commonJsPackage) {
   "use strict";
 
   const STATES = Object.freeze({
@@ -22,17 +25,71 @@
     ERROR: "error"
   });
 
+  function getUserFriendlyCityError(error, context) {
+    const code = asText(error && error.code);
+    const status = Number(error && error.status) || 0;
+
+    if (context === "search") {
+      if (code === "TIMEOUT") {
+        return "Die Stadtsuche dauert momentan ungewöhnlich lange. Bitte versuche es erneut.";
+      }
+      return "Die Stadtsuche ist momentan nicht erreichbar. Bereits installierte Städte können weiterhin gespielt werden.";
+    }
+    if (context === "validation") {
+      return "Die heruntergeladenen Stadtdaten konnten nicht sicher verwendet werden. Es wurde nichts gespeichert.";
+    }
+    if (context === "storage") {
+      return "Die Stadt konnte nicht lokal gespeichert werden. Bitte versuche es erneut und prüfe, ob ausreichend lokaler Speicher verfügbar ist.";
+    }
+    if (context !== "download") {
+      return "Der Stadtvorgang konnte nicht abgeschlossen werden. Bitte versuche es erneut.";
+    }
+
+    if (code === "ABORTED") return "Download wurde abgebrochen. Es wurden keine Stadtdaten gespeichert.";
+    if (code === "NO_STREETS") {
+      return "Für diese Gemeinde konnten keine spielbaren Straßen gefunden werden. Es wurde nichts gespeichert.";
+    }
+    if (code === "TOO_FEW_STREETS") {
+      const streetCount = Number(error && error.streetCount);
+      return Number.isInteger(streetCount)
+        ? `Es wurden nur ${streetCount} spielbare Straßen gefunden. Diese Gemeinde eignet sich derzeit nicht für den Straßentrainer.`
+        : "Für diese Gemeinde wurden zu wenige spielbare Straßen gefunden. Sie eignet sich derzeit nicht für den Straßentrainer.";
+    }
+    if (code === "TIMEOUT") {
+      return "Der Download hat zu lange gedauert. Bitte versuche es erneut.";
+    }
+    if (code === "NETWORK_ERROR") {
+      return "Der OpenStreetMap-Datendienst konnte nicht erreicht werden. Bitte prüfe deine Internetverbindung und versuche es erneut.";
+    }
+    if (code === "HTTP_ERROR" && status === 429) {
+      return "Der OpenStreetMap-Datendienst erhält momentan sehr viele Anfragen. Bitte warte kurz und versuche den Download erneut.";
+    }
+    if (code === "HTTP_ERROR" && [502, 503, 504].includes(status)) {
+      return "Der OpenStreetMap-Datendienst ist momentan ausgelastet. Die Stadt konnte deshalb nicht vollständig geladen werden. Bitte versuche es erneut.";
+    }
+    if (code === "HTTP_ERROR" && (status === 500 || status >= 500)) {
+      return "Der OpenStreetMap-Datendienst hat einen vorübergehenden Serverfehler gemeldet. Bitte versuche den Download erneut.";
+    }
+    if (code === "INVALID_JSON" || code === "INVALID_RESPONSE") {
+      return "Der OpenStreetMap-Datendienst hat keine sicher verwendbare Antwort geliefert. Bitte versuche den Download erneut.";
+    }
+    return "Die Daten für diese Stadt konnten momentan nicht vollständig geladen werden. Bitte versuche den Download erneut.";
+  }
+
   const REQUIRED_ELEMENT_IDS = [
     "citySelector", "citySelectorButton", "activeCityName", "cityMenu", "installedCityList",
-    "addCityButton", "cityManagerHeaderStatus", "cityManagerModalOverlay", "cityManagerDialog",
+    "addCityButton", "importCityButton", "cityImportFileInput", "cityManagerHeaderStatus",
+    "cityManagerModalOverlay", "cityManagerDialog",
     "closeCityManagerButton", "cityManagerAlert", "citySearchPanel", "citySearchForm", "citySearchInput",
     "citySearchButton", "citySearchStatus", "citySearchResults", "selectedMunicipalityPanel",
     "selectedMunicipalityName", "selectedMunicipalityContext", "municipalityActionButton",
     "cityDownloadPanel", "cityDownloadTitle", "cityDownloadProgress", "cityProgressBar",
     "cityProgressMessage", "cancelCityDownloadButton", "cityValidationPanel", "cityValidationOutcome",
+    "cityPreviewMetadata",
     "previewStreetCount", "previewPoiCount", "previewFireStationCount", "previewCategoryCounts",
     "cityWarningSummary", "toggleWarningDetailsButton", "cityWarningDetails", "cancelValidationButton",
-    "saveCityButton", "cityCompletedPanel", "cityCompletedMessage", "closeCompletedButton",
+    "saveCityButton", "cityCompletedPanel", "cityCompletedMessage", "activateImportedCityButton",
+    "closeCompletedButton",
     "cityManagerLiveRegion", "deleteCityModalOverlay", "deleteCityDialog", "deleteCityMessage",
     "deleteCityStatus", "cancelDeleteCityButton", "confirmDeleteCityButton"
   ];
@@ -50,7 +107,16 @@
     fire_station: "Feuerwehren",
     school: "Schulen",
     kindergarten: "Kindergärten",
-    supermarket: "Supermärkte"
+    childcare: "Kindertagesstätten",
+    supermarket: "Supermärkte",
+    "senior-care": "Senioren- und Pflegeeinrichtungen",
+    fuel: "Tankstellen",
+    health: "Gesundheit",
+    "public-facility": "Öffentliche Einrichtungen",
+    "sports-leisure": "Sport und Freizeit",
+    hospitality: "Gastronomie und Beherbergung",
+    company: "Unternehmen",
+    "other-relevant": "Sonstige einsatzrelevante Orte"
   });
 
   function asText(value) {
@@ -100,6 +166,7 @@
     const storage = options.storage || (root && root.StrassentrainerCityStorage) || null;
     const osmService = options.osmService || (root && root.StrassentrainerOsmService) || null;
     const validator = options.validator || (root && root.StrassentrainerCityDataValidator) || null;
+    const packageApi = options.packageApi || (root && root.StrassentrainerCityPackage) || commonJsPackage;
     const AbortControllerClass = options.AbortController
       || (root && root.AbortController)
       || (typeof AbortController !== "undefined" ? AbortController : null);
@@ -130,18 +197,34 @@
     let downloadOperationId = 0;
     let refreshOperationId = 0;
     let activeOperationId = 0;
+    let pendingCityActivation = null;
     let lastSearchQuery = "";
     let errorContext = "";
     let deleteTarget = null;
     let deleteOpen = false;
     let deleting = false;
+    let workflowSource = "download";
+    let importedAlreadyInstalled = false;
+    let importedActiveCity = false;
+    let completedCity = null;
+    let completedActivationAvailable = false;
+    let activatingCompletedCity = false;
+    let importOperationId = 0;
+    const exportingCityIds = new Set();
     let canChangeCity = typeof options.canChangeCity === "function" ? options.canChangeCity : () => true;
+    let activateCityCallback = typeof options.activateCity === "function" ? options.activateCity : null;
+    let deleteCityCallback = typeof options.deleteCity === "function" ? options.deleteCity : null;
+    let getRuntimeCity = typeof options.getRuntimeCity === "function" ? options.getRuntimeCity : () => null;
 
     function requireDependencies() {
       if (!documentRef) throw new Error("CityManager benötigt ein document.");
       if (!storage) throw new Error("StrassentrainerCityStorage ist nicht verfügbar.");
       if (!osmService) throw new Error("StrassentrainerOsmService ist nicht verfügbar.");
       if (!validator) throw new Error("StrassentrainerCityDataValidator ist nicht verfügbar.");
+      if (!packageApi || typeof packageApi.readCityPackageFile !== "function"
+        || typeof packageApi.exportAndDownloadCityPackage !== "function") {
+        throw new Error("StrassentrainerCityPackage ist nicht verfügbar.");
+      }
       if (!AbortControllerClass) throw new Error("AbortController ist nicht verfügbar.");
     }
 
@@ -161,6 +244,13 @@
       elements.cityManagerLiveRegion.textContent = message || "";
     }
 
+    function syncDocumentModalState() {
+      const bodyClassList = documentRef && documentRef.body && documentRef.body.classList;
+      if (!bodyClassList) return;
+      if (modalOpen || deleteOpen) bodyClassList.add("city-modal-open");
+      else bodyClassList.remove("city-modal-open");
+    }
+
     function setHeaderStatus(message) {
       if (!elements) return;
       elements.cityManagerHeaderStatus.textContent = message || "";
@@ -174,8 +264,26 @@
       }
     }
 
+    async function activateCity(cityId, activationOptions) {
+      if (activateCityCallback) return activateCityCallback(cityId, activationOptions);
+      return storage.setActiveCityId(cityId);
+    }
+
+    async function removeCity(cityId) {
+      if (deleteCityCallback) return deleteCityCallback(cityId);
+      return storage.deleteCity(cityId);
+    }
+
+    function runtimeCity() {
+      try {
+        return getRuntimeCity() || null;
+      } catch (_) {
+        return null;
+      }
+    }
+
     function explainBlockedCityChange() {
-      const message = "Ein Stadtwechsel ist während einer aktiven oder vorbereiteten Runde nicht möglich.";
+      const message = "Ein Stadtwechsel ist gerade nicht möglich. Bitte warte, bis der laufende Stadtvorgang abgeschlossen ist.";
       setHeaderStatus(message);
       if (modalOpen) {
         alertMessage = message;
@@ -233,6 +341,17 @@
         if (context) selectButton.appendChild(makeElement("span", "installed-city-context", context));
         selectButton.addEventListener("click", () => activateInstalledCity(city, { fromModal: false }));
 
+        const exportButton = makeElement("button", "installed-city-export", "⇩");
+        exportButton.type = "button";
+        exportButton.setAttribute("role", "menuitem");
+        exportButton.dataset.cityId = city.id;
+        exportButton.disabled = exportingCityIds.has(city.id);
+        exportButton.setAttribute("aria-label", `${municipalityName(city)} als Stadtdatei exportieren`);
+        exportButton.addEventListener("click", event => {
+          event.stopPropagation();
+          void exportInstalledCity(city);
+        });
+
         const deleteButton = makeElement("button", "installed-city-delete", "✕");
         deleteButton.type = "button";
         deleteButton.setAttribute("role", "menuitem");
@@ -244,11 +363,12 @@
         });
 
         row.appendChild(selectButton);
+        row.appendChild(exportButton);
         row.appendChild(deleteButton);
         elements.installedCityList.appendChild(row);
       });
 
-      const activeCity = installedCities.find(city => city.id === activeCityId);
+      const activeCity = runtimeCity() || installedCities.find(city => city.id === activeCityId);
       elements.activeCityName.textContent = activeCity ? municipalityName(activeCity) : "Keine Stadt ausgewählt";
     }
 
@@ -271,6 +391,30 @@
         button.addEventListener("click", () => selectMunicipality(municipality));
         elements.citySearchResults.appendChild(button);
       });
+    }
+
+    async function exportInstalledCity(city) {
+      const cityId = asText(city?.id);
+      if (!cityId || exportingCityIds.has(cityId)) return;
+      exportingCityIds.add(cityId);
+      renderInstalledCities();
+      setHeaderStatus(`${municipalityName(city)} wird als Stadtdatei vorbereitet …`);
+      try {
+        const exported = await packageApi.exportAndDownloadCityPackage(cityId, {
+          storage,
+          document: documentRef
+        });
+        setHeaderStatus(`${municipalityName(city)} wurde als „${exported.filename}“ exportiert.`);
+        announce(`${municipalityName(city)} wurde erfolgreich exportiert.`);
+      } catch (error) {
+        const message = asText(error?.message)
+          || "Die Stadt konnte wegen inkonsistenter lokaler Daten nicht exportiert werden.";
+        setHeaderStatus(message);
+        announce(message);
+      } finally {
+        exportingCityIds.delete(cityId);
+        renderInstalledCities();
+      }
     }
 
     function collectIssues(kind) {
@@ -334,20 +478,37 @@
       elements.previewPoiCount.textContent = String(pois.length);
       elements.previewFireStationCount.textContent = String(fireStationCount);
 
+      const context = municipalityContext(city, true);
+      const source = asText(city.source) || "Nicht angegeben";
+      const dataVersion = city.dataVersion === undefined || city.dataVersion === null
+        ? "Nicht angegeben"
+        : String(city.dataVersion);
+      elements.cityPreviewMetadata.replaceChildren();
+      elements.cityPreviewMetadata.appendChild(makeElement("strong", "", municipalityName(city)));
+      if (context) elements.cityPreviewMetadata.appendChild(documentRef.createTextNode(` · ${context}`));
+      elements.cityPreviewMetadata.appendChild(makeElement("br"));
+      elements.cityPreviewMetadata.appendChild(documentRef.createTextNode(`Quelle: ${source} · Datenversion: ${dataVersion}`));
+
       elements.previewCategoryCounts.replaceChildren();
       const categoryCounts = new Map();
       pois.forEach(poi => {
         const category = asText(poi && poi.category);
-        if (category) categoryCounts.set(category, (categoryCounts.get(category) || 0) + 1);
+        if (!category) return;
+        const current = categoryCounts.get(category) || {
+          count: 0,
+          label: asText(poi.categoryLabel) || CATEGORY_LABELS[category] || category
+        };
+        current.count += 1;
+        categoryCounts.set(category, current);
       });
       [...categoryCounts.entries()].sort((first, second) => {
-        const firstLabel = CATEGORY_LABELS[first[0]] || first[0];
-        const secondLabel = CATEGORY_LABELS[second[0]] || second[0];
+        const firstLabel = first[1].label;
+        const secondLabel = second[1].label;
         return firstLabel.localeCompare(secondLabel, "de");
-      }).forEach(([category, count]) => {
+      }).forEach(([, entry]) => {
         const item = makeElement("span", "city-category-count");
-        item.appendChild(makeElement("strong", "", String(count)));
-        item.appendChild(documentRef.createTextNode(` ${CATEGORY_LABELS[category] || category}`));
+        item.appendChild(makeElement("strong", "", String(entry.count)));
+        item.appendChild(documentRef.createTextNode(` ${entry.label}`));
         elements.previewCategoryCounts.appendChild(item);
       });
 
@@ -357,16 +518,25 @@
       if (packageData.valid) elements.cityValidationOutcome.classList.remove("invalid");
       else elements.cityValidationOutcome.classList.add("invalid");
       const heading = packageData.valid
-        ? `Datenprüfung für ${municipalityName(city)} erfolgreich`
+        ? `${workflowSource === "import" ? "Importprüfung" : "Datenprüfung"} für ${municipalityName(city)} erfolgreich`
         : "Stadtpaket konnte nicht bestätigt werden";
       elements.cityValidationOutcome.appendChild(makeElement("h3", "", heading));
       elements.cityValidationOutcome.appendChild(makeElement(
         "p",
         packageData.valid ? "city-validation-success" : "city-validation-error",
         packageData.valid
-          ? "Gemeindegrenze, Straßengeometrien und Einrichtungen wurden geprüft."
+          ? (workflowSource === "import"
+            ? "Schema, Stadtmetadaten, IDs, Straßengeometrien und Einrichtungen wurden lokal geprüft."
+            : "Gemeindegrenze, Straßengeometrien und Einrichtungen wurden geprüft.")
           : "Die Daten wurden geladen, konnten aber nicht als vollständiges spielbares Stadtpaket bestätigt werden."
       ));
+      if (workflowSource === "import" && importedAlreadyInstalled) {
+        elements.cityValidationOutcome.appendChild(makeElement(
+          "p",
+          "city-validation-error",
+          "Diese Stadt ist bereits installiert. Sie wird nur nach einem ausdrücklichen Klick ersetzt."
+        ));
+      }
       if (errors.length) {
         const errorList = makeElement("div", "city-validation-errors");
         appendIssueList(errorList, errors, 8);
@@ -384,7 +554,11 @@
       appendIssueList(elements.cityWarningDetails, warnings, 20);
 
       elements.saveCityButton.disabled = !packageData.valid || phase === STATES.SAVING;
-      elements.saveCityButton.textContent = phase === STATES.SAVING ? "Stadt wird gespeichert …" : "Stadt speichern";
+      if (phase === STATES.SAVING) elements.saveCityButton.textContent = "Stadt wird gespeichert …";
+      else if (workflowSource === "import" && importedAlreadyInstalled) {
+        elements.saveCityButton.textContent = "Vorhandene Stadt ersetzen";
+      } else if (workflowSource === "import") elements.saveCityButton.textContent = "Importieren";
+      else elements.saveCityButton.textContent = "Stadt speichern";
       elements.cancelValidationButton.disabled = phase === STATES.SAVING;
     }
 
@@ -408,6 +582,17 @@
       setHidden(elements.cityManagerAlert, !alertMessage);
       elements.cityManagerAlert.textContent = alertMessage;
 
+      const managerBusy = [
+        STATES.SEARCHING, STATES.CHECKING_INSTALLED, STATES.ACTIVATING,
+        STATES.DOWNLOADING, STATES.VALIDATING, STATES.SAVING
+      ].includes(phase);
+      elements.cityManagerDialog.setAttribute("aria-busy", managerBusy ? "true" : "false");
+      elements.citySearchForm.setAttribute("aria-busy", phase === STATES.SEARCHING ? "true" : "false");
+      elements.cityDownloadPanel.setAttribute(
+        "aria-busy",
+        downloadVisible ? "true" : "false"
+      );
+
       elements.citySearchButton.disabled = [STATES.SEARCHING, STATES.ACTIVATING].includes(phase);
       elements.citySearchButton.textContent = phase === STATES.SEARCHING ? "Suche läuft …" : "Suchen";
       elements.citySearchInput.disabled = [
@@ -422,7 +607,7 @@
       else if (phase === STATES.SEARCH_RESULTS) {
         searchStatus = searchResults.length
           ? `${searchResults.length} ${searchResults.length === 1 ? "Gemeinde gefunden" : "Gemeinden gefunden"}.`
-          : "Keine passende Gemeinde gefunden.";
+          : "Keine passende deutsche Gemeinde gefunden. Bitte prüfe die Schreibweise.";
       } else if (phase === STATES.CHECKING_INSTALLED) searchStatus = "Installationsstatus wird geprüft …";
       else if (phase === STATES.ACTIVATING) searchStatus = "Stadt wird als aktiv vorgemerkt …";
       elements.citySearchStatus.textContent = searchStatus;
@@ -440,6 +625,8 @@
           elements.municipalityActionButton.textContent = "Stadt wird ausgewählt …";
         } else if (selectedMunicipalityInstalled) {
           elements.municipalityActionButton.textContent = "Stadt auswählen";
+        } else if (phase === STATES.ERROR && errorContext === "download") {
+          elements.municipalityActionButton.textContent = "Erneut herunterladen";
         } else {
           elements.municipalityActionButton.textContent = "Stadt herunterladen";
         }
@@ -448,19 +635,30 @@
       if (downloadVisible) {
         const cityName = municipalityName(selectedMunicipality);
         elements.cityDownloadTitle.textContent = phase === STATES.VALIDATING
-          ? `${cityName} wird geprüft`
+          ? (workflowSource === "import" ? "Stadtdatei wird geprüft" : `${cityName} wird geprüft`)
           : `${cityName} wird heruntergeladen`;
         const progressValue = phase === STATES.VALIDATING ? 100 : clampProgress(progress.progress);
         elements.cityDownloadProgress.setAttribute("aria-valuenow", String(progressValue));
+        elements.cityDownloadProgress.setAttribute("aria-valuetext", asText(progress.message) || "Download läuft");
         elements.cityProgressBar.style.width = `${progressValue}%`;
         elements.cityProgressMessage.textContent = phase === STATES.VALIDATING
-          ? "Die heruntergeladenen Daten werden validiert …"
+          ? (workflowSource === "import"
+            ? "Die ausgewählte JSON-Datei wird sicher eingelesen und validiert …"
+            : "Die heruntergeladenen Daten werden validiert …")
           : (asText(progress.message) || "Download läuft …");
         setHidden(elements.cancelCityDownloadButton, phase !== STATES.DOWNLOADING);
         elements.cancelCityDownloadButton.disabled = phase !== STATES.DOWNLOADING;
       }
 
       if (validationVisible) renderValidation();
+      if (completedVisible) {
+        setHidden(elements.activateImportedCityButton, !completedActivationAvailable);
+        elements.activateImportedCityButton.disabled = activatingCompletedCity;
+        elements.activateImportedCityButton.textContent = activatingCompletedCity
+          ? "Stadt wird aktiviert …"
+          : "Stadt aktivieren";
+        elements.closeCompletedButton.disabled = activatingCompletedCity;
+      }
     }
 
     function setMenuOpen(open) {
@@ -491,6 +689,7 @@
     }
 
     function resetWorkflow() {
+      importOperationId += 1;
       cancelSearch();
       cancelDownload({ closing: true });
       phase = STATES.IDLE;
@@ -504,7 +703,16 @@
       warningDetailsExpanded = false;
       lastSearchQuery = "";
       progress = { stage: "", message: "Download wird vorbereitet …", progress: 0 };
-      if (elements) elements.citySearchInput.value = "";
+      workflowSource = "download";
+      importedAlreadyInstalled = false;
+      importedActiveCity = false;
+      completedCity = null;
+      completedActivationAvailable = false;
+      activatingCompletedCity = false;
+      if (elements) {
+        elements.citySearchInput.value = "";
+        elements.cityImportFileInput.value = "";
+      }
     }
 
     function open(opener) {
@@ -514,11 +722,12 @@
       previousFocus = opener || documentRef.activeElement || elements.citySelectorButton;
       reopenMenuAfterModal = previousFocus === elements.addCityButton;
       modalOpen = true;
+      syncDocumentModalState();
       setMenuOpen(false);
       setHidden(elements.cityManagerModalOverlay, false);
       elements.cityManagerModalOverlay.setAttribute("aria-hidden", "false");
       if (!isCityChangeAllowed()) {
-        noticeMessage = "Beende zuerst die aktuelle Runde, bevor du eine Stadt speicherst oder auswählst.";
+        noticeMessage = "Bitte warte, bis der laufende Stadtvorgang abgeschlossen ist.";
       }
       render();
       schedule(() => elements.citySearchInput.focus(), 0);
@@ -531,6 +740,7 @@
       cancelSearch();
       cancelDownload({ closing: true });
       modalOpen = false;
+      syncDocumentModalState();
       setHidden(elements.cityManagerModalOverlay, true);
       elements.cityManagerModalOverlay.setAttribute("aria-hidden", "true");
       const focusTarget = previousFocus;
@@ -567,6 +777,61 @@
       }
     }
 
+    function requestCityImport() {
+      if (!initialized) return;
+      setMenuOpen(false);
+      elements.cityImportFileInput.click();
+    }
+
+    async function handleImportFileSelection(event) {
+      const file = event?.target?.files?.[0] || null;
+      if (!file) return;
+      open(elements.importCityButton);
+      const operationId = ++importOperationId;
+      workflowSource = "import";
+      phase = STATES.VALIDATING;
+      selectedMunicipality = null;
+      validatedPackage = null;
+      importedAlreadyInstalled = false;
+      importedActiveCity = false;
+      alertMessage = "";
+      noticeMessage = "";
+      warningDetailsExpanded = false;
+      render();
+      announce("Die ausgewählte Stadtdatei wird lokal geprüft.");
+
+      try {
+        const result = await packageApi.readCityPackageFile(file);
+        if (operationId !== importOperationId || !modalOpen) return;
+        validatedPackage = result;
+        if (result.valid && result.city?.id) {
+          importedAlreadyInstalled = await storage.hasCity(result.city.id);
+          if (operationId !== importOperationId || !modalOpen) return;
+          const currentRuntimeCityId = asText(runtimeCity()?.id);
+          importedActiveCity = result.city.id === activeCityId || result.city.id === currentRuntimeCityId;
+        }
+        phase = STATES.VALIDATION_RESULT;
+        alertMessage = result.valid ? "" : packageApi.validationErrorMessage(result);
+        render();
+        announce(result.valid
+          ? `Importvorschau für ${municipalityName(result.city)} ist bereit. Es wurde noch nichts gespeichert.`
+          : alertMessage);
+        schedule(() => {
+          const focusTarget = result.valid ? elements.saveCityButton : elements.cancelValidationButton;
+          if (focusTarget && typeof focusTarget.focus === "function") focusTarget.focus();
+        }, 0);
+      } catch (error) {
+        if (operationId !== importOperationId || !modalOpen) return;
+        phase = STATES.ERROR;
+        errorContext = "import";
+        alertMessage = asText(error?.message) || "Die ausgewählte Stadtdatei konnte nicht geprüft werden.";
+        render();
+        announce(alertMessage);
+      } finally {
+        elements.cityImportFileInput.value = "";
+      }
+    }
+
     async function performSearch(event) {
       if (event && typeof event.preventDefault === "function") event.preventDefault();
       if ([STATES.ACTIVATING, STATES.DOWNLOADING, STATES.VALIDATING, STATES.SAVING].includes(phase)) return;
@@ -578,6 +843,8 @@
         return;
       }
       if (phase === STATES.SEARCHING && query === lastSearchQuery) return;
+
+      workflowSource = "download";
 
       cancelSearch();
       const operationId = ++searchOperationId;
@@ -602,13 +869,13 @@
         render();
         announce(searchResults.length
           ? `${searchResults.length} Gemeinden gefunden.`
-          : "Keine passende Gemeinde gefunden.");
+          : "Keine passende deutsche Gemeinde gefunden. Bitte prüfe die Schreibweise.");
       } catch (error) {
         if (operationId !== searchOperationId || !modalOpen) return;
         if (searchController.signal.aborted || (error && error.code === "ABORTED")) return;
         phase = STATES.ERROR;
         errorContext = "search";
-        alertMessage = "Die Stadtsuche ist momentan nicht erreichbar. Bereits installierte Städte können weiterhin verwendet werden.";
+        alertMessage = getUserFriendlyCityError(error, "search");
         render();
         announce(alertMessage);
       } finally {
@@ -652,13 +919,36 @@
       }
     }
 
-    async function activateInstalledCity(city, activateOptions = {}) {
+    function activateInstalledCity(city, activateOptions = {}) {
+      const cityId = asText(city && city.id);
+      if (!cityId) return Promise.resolve();
+      if (pendingCityActivation?.cityId === cityId) return pendingCityActivation.promise;
+      const promise = performInstalledCityActivation(city, activateOptions);
+      pendingCityActivation = { cityId, promise };
+      void promise.finally(() => {
+        if (pendingCityActivation?.promise === promise) pendingCityActivation = null;
+      }).catch(() => {});
+      return promise;
+    }
+
+    async function performInstalledCityActivation(city, activateOptions = {}) {
       if (!city || !asText(city.id)) return;
       if (!isCityChangeAllowed()) {
         explainBlockedCityChange();
         return;
       }
       const operationId = ++activeOperationId;
+      if (city.id === activeCityId) {
+        setHeaderStatus(`${municipalityName(city)} ist bereits aktiv und spielbereit.`);
+        if (activateOptions.fromModal && modalOpen) {
+          phase = STATES.COMPLETED;
+          elements.cityCompletedMessage.textContent = `${municipalityName(city)} ist bereits aktiv und spielbereit.`;
+          render();
+        } else {
+          setMenuOpen(false);
+        }
+        return;
+      }
       const previousPhase = phase;
       if (activateOptions.fromModal) {
         phase = STATES.ACTIVATING;
@@ -666,14 +956,14 @@
         render();
       }
       try {
-        await storage.setActiveCityId(city.id);
+        await activateCity(city.id);
         if (operationId !== activeOperationId) return;
         await refreshInstalledCities();
-        setHeaderStatus(`${municipalityName(city)} ist als aktive Stadt vorgemerkt. Die Spielumschaltung folgt in Phase 6.`);
+        setHeaderStatus(`${municipalityName(city)} ist aktiv und spielbereit.`);
         announce(`${municipalityName(city)} wurde als aktive Stadt ausgewählt.`);
         if (activateOptions.fromModal && modalOpen) {
           phase = STATES.COMPLETED;
-          elements.cityCompletedMessage.textContent = `${municipalityName(city)} ist bereits installiert und wurde als aktive Stadt vorgemerkt. Das laufende Spiel verwendet bis Phase 6 weiterhin die Oberasbach-Daten.`;
+          elements.cityCompletedMessage.textContent = `${municipalityName(city)} ist bereits installiert und jetzt aktiv. Karte und Trainingsziele wurden umgeschaltet.`;
           render();
         } else {
           setMenuOpen(false);
@@ -682,16 +972,17 @@
         if (operationId !== activeOperationId) return;
         if (activateOptions.fromModal && modalOpen) {
           phase = previousPhase === STATES.MUNICIPALITY_SELECTED ? previousPhase : STATES.MUNICIPALITY_SELECTED;
-          alertMessage = "Die aktive Stadt konnte nicht lokal gespeichert werden.";
+          alertMessage = "Die ausgewählte Stadt konnte nicht geladen werden. Die bisherige Stadt bleibt aktiv.";
           render();
         } else {
-          setHeaderStatus("Die aktive Stadt konnte nicht geändert werden.");
+          setHeaderStatus("Die ausgewählte Stadt konnte nicht geladen werden. Die bisherige Stadt bleibt aktiv.");
         }
       }
     }
 
     async function handleMunicipalityAction() {
-      if (phase !== STATES.MUNICIPALITY_SELECTED || !selectedMunicipality) return;
+      const retryingFailedDownload = phase === STATES.ERROR && errorContext === "download";
+      if ((!retryingFailedDownload && phase !== STATES.MUNICIPALITY_SELECTED) || !selectedMunicipality) return;
       if (selectedMunicipalityInstalled) {
         const cityId = municipalityCityId(selectedMunicipality);
         const city = installedCities.find(candidate => candidate.id === cityId) || {
@@ -704,21 +995,15 @@
       await downloadSelectedMunicipality();
     }
 
-    function downloadErrorMessage(error) {
-      if (error && error.code === "TIMEOUT") {
-        return "Der Download hat zu lange gedauert. Bitte versuche es später erneut.";
-      }
-      if (error && error.code === "NO_STREETS") {
-        return "Für diese Gemeinde wurden keine spielbaren Straßen gefunden. Es wurde nichts gespeichert.";
-      }
-      return "Die Daten für diese Stadt konnten momentan nicht vollständig geladen werden. Bitte versuche den Download später erneut.";
-    }
-
     async function downloadSelectedMunicipality() {
-      if (phase !== STATES.MUNICIPALITY_SELECTED || !selectedMunicipality || selectedMunicipalityInstalled) return;
+      const retryingFailedDownload = phase === STATES.ERROR && errorContext === "download";
+      if ((!retryingFailedDownload && phase !== STATES.MUNICIPALITY_SELECTED)
+        || !selectedMunicipality || selectedMunicipalityInstalled) return;
       cancelDownload({ closing: true });
+      workflowSource = "download";
       const operationId = ++downloadOperationId;
-      downloadController = new AbortControllerClass();
+      const controller = new AbortControllerClass();
+      downloadController = controller;
       phase = STATES.DOWNLOADING;
       progress = { stage: "preparing", message: "Gemeindedownload wird vorbereitet …", progress: 0 };
       alertMessage = "";
@@ -731,7 +1016,7 @@
       let validationStarted = false;
       try {
         const downloaded = await osmService.fetchCityData(selectedMunicipality, {
-          signal: downloadController.signal,
+          signal: controller.signal,
           onProgress: nextProgress => {
             if (operationId !== downloadOperationId || phase !== STATES.DOWNLOADING || !modalOpen) return;
             progress = {
@@ -740,17 +1025,17 @@
               progress: clampProgress(nextProgress && nextProgress.progress)
             };
             render();
-            announce(`${progress.message} ${progress.progress} Prozent.`);
+            announce(progress.message);
           }
         });
-        if (operationId !== downloadOperationId || !modalOpen || downloadController.signal.aborted) return;
+        if (operationId !== downloadOperationId || !modalOpen || controller.signal.aborted) return;
         phase = STATES.VALIDATING;
         validationStarted = true;
         render();
         announce("Die heruntergeladenen Stadtdaten werden geprüft.");
 
-        const result = validator.validateCityData(downloaded);
-        if (operationId !== downloadOperationId || !modalOpen || downloadController.signal.aborted) return;
+        const result = validator.validateCityData(downloaded, { sourceMode: "download" });
+        if (operationId !== downloadOperationId || !modalOpen || controller.signal.aborted) return;
         validatedPackage = result;
         phase = STATES.VALIDATION_RESULT;
         render();
@@ -759,7 +1044,7 @@
           : "Datenprüfung fehlgeschlagen. Die Stadt kann nicht gespeichert werden.");
       } catch (error) {
         if (operationId !== downloadOperationId || !modalOpen) return;
-        if (downloadController.signal.aborted || (error && error.code === "ABORTED")) {
+        if (controller.signal.aborted || (error && error.code === "ABORTED")) {
           phase = STATES.MUNICIPALITY_SELECTED;
           noticeMessage = "Download abgebrochen. Es wurden keine Stadtdaten gespeichert.";
           render();
@@ -769,13 +1054,25 @@
         phase = STATES.ERROR;
         errorContext = validationStarted ? "validation" : "download";
         alertMessage = errorContext === "validation"
-          ? "Die heruntergeladenen Daten konnten nicht geprüft werden. Es wurde nichts gespeichert."
-          : downloadErrorMessage(error);
+          ? getUserFriendlyCityError(error, "validation")
+          : getUserFriendlyCityError(error, "download");
         render();
         announce(alertMessage);
       } finally {
         if (operationId === downloadOperationId) downloadController = null;
       }
+    }
+
+    async function loadStoredCityData(cityId) {
+      if (typeof storage.getCityData === "function") return storage.getCityData(cityId);
+      if (typeof storage.getCity !== "function" || typeof storage.getCityStreets !== "function"
+        || typeof storage.getCityPois !== "function") return null;
+      const [city, streets, pois] = await Promise.all([
+        storage.getCity(cityId),
+        storage.getCityStreets(cityId),
+        storage.getCityPois(cityId)
+      ]);
+      return city ? { city, streets, pois } : null;
     }
 
     async function saveValidatedCity() {
@@ -788,20 +1085,84 @@
       alertMessage = "";
       render();
       announce("Stadt wird lokal gespeichert.");
+      let citySaved = false;
+      let previousActivePackage = null;
+      let rollbackSucceeded = false;
       try {
+        if (workflowSource === "import" && importedAlreadyInstalled && importedActiveCity) {
+          previousActivePackage = await loadStoredCityData(validatedPackage.city.id);
+          if (!previousActivePackage) {
+            throw new Error("Die bisherige aktive Stadt konnte nicht für ein sicheres Ersetzen gelesen werden.");
+          }
+        }
         await storage.saveCity(validatedPackage.city, validatedPackage.streets, validatedPackage.pois);
-        await storage.setActiveCityId(validatedPackage.city.id);
+        citySaved = true;
+        if (workflowSource === "download" || importedActiveCity) {
+          await activateCity(validatedPackage.city.id, { force: true });
+        }
         await refreshInstalledCities();
         phase = STATES.COMPLETED;
-        elements.cityCompletedMessage.textContent = `${municipalityName(validatedPackage.city)} wurde installiert und als aktive Stadt vorgemerkt. Das laufende Spiel verwendet bis Phase 6 weiterhin die kuratierten Oberasbach-Daten.`;
-        setHeaderStatus(`${municipalityName(validatedPackage.city)} wurde installiert. Die Spielumschaltung folgt in Phase 6.`);
+        completedCity = validatedPackage.city;
+        completedActivationAvailable = workflowSource === "import" && !importedActiveCity;
+        if (workflowSource === "import" && importedActiveCity) {
+          elements.cityCompletedMessage.textContent = `${municipalityName(validatedPackage.city)} wurde ersetzt. Der aktive Stadtkontext wurde vollständig neu geladen.`;
+          setHeaderStatus(`${municipalityName(validatedPackage.city)} wurde ersetzt und neu geladen.`);
+        } else if (workflowSource === "import") {
+          elements.cityCompletedMessage.textContent = `${municipalityName(validatedPackage.city)} wurde importiert. Die bisher aktive Stadt bleibt unverändert.`;
+          setHeaderStatus(`${municipalityName(validatedPackage.city)} wurde importiert.`);
+        } else {
+          elements.cityCompletedMessage.textContent = `${municipalityName(validatedPackage.city)} wurde installiert, aktiviert und ist sofort spielbereit.`;
+          setHeaderStatus(`${municipalityName(validatedPackage.city)} wurde installiert und aktiviert.`);
+        }
         render();
-        announce(`${municipalityName(validatedPackage.city)} wurde erfolgreich installiert.`);
+        announce(elements.cityCompletedMessage.textContent);
       } catch (_) {
+        if (citySaved && previousActivePackage) {
+          try {
+            await storage.saveCity(
+              previousActivePackage.city,
+              previousActivePackage.streets,
+              previousActivePackage.pois
+            );
+            rollbackSucceeded = true;
+          } catch (_) {
+            rollbackSucceeded = false;
+          }
+        }
         phase = STATES.VALIDATION_RESULT;
-        alertMessage = "Die Stadt konnte nicht lokal gespeichert werden. Bitte prüfe den verfügbaren Speicher und versuche es erneut.";
+        if (citySaved) await refreshInstalledCities();
+        alertMessage = rollbackSucceeded
+          ? "Die ersetzte aktive Stadt konnte nicht neu geladen werden. Die bisherige Stadtversion wurde vollständig wiederhergestellt."
+          : (citySaved
+            ? "Die Stadt wurde gespeichert, konnte aber nicht aktiviert werden. Die bisherige Stadt bleibt aktiv."
+            : getUserFriendlyCityError(null, "storage"));
         render();
         announce(alertMessage);
+      }
+    }
+
+    async function activateCompletedImport() {
+      if (phase !== STATES.COMPLETED || !completedActivationAvailable || !completedCity
+        || activatingCompletedCity) return;
+      if (!isCityChangeAllowed()) {
+        explainBlockedCityChange();
+        return;
+      }
+      activatingCompletedCity = true;
+      render();
+      try {
+        await activateCity(completedCity.id);
+        await refreshInstalledCities();
+        completedActivationAvailable = false;
+        elements.cityCompletedMessage.textContent = `${municipalityName(completedCity)} ist jetzt aktiv und sofort spielbereit.`;
+        setHeaderStatus(`${municipalityName(completedCity)} wurde aktiviert.`);
+        announce(elements.cityCompletedMessage.textContent);
+      } catch (_) {
+        alertMessage = "Die importierte Stadt konnte nicht aktiviert werden. Die bisherige Stadt bleibt aktiv.";
+        announce(alertMessage);
+      } finally {
+        activatingCompletedCity = false;
+        render();
       }
     }
 
@@ -816,7 +1177,9 @@
       validatedPackage = null;
       phase = selectedMunicipality ? STATES.MUNICIPALITY_SELECTED : STATES.IDLE;
       alertMessage = "";
-      noticeMessage = "Die Installation wurde verworfen. Es wurden keine Stadtdaten gespeichert.";
+      noticeMessage = workflowSource === "import"
+        ? "Der Import wurde abgebrochen. Es wurden keine Stadtdaten gespeichert."
+        : "Die Installation wurde verworfen. Es wurden keine Stadtdaten gespeichert.";
       warningDetailsExpanded = false;
       render();
       announce(noticeMessage);
@@ -830,6 +1193,7 @@
       }
       deleteTarget = city;
       deleteOpen = true;
+      syncDocumentModalState();
       previousFocus = opener || documentRef.activeElement || elements.citySelectorButton;
       setMenuOpen(false);
       elements.deleteCityMessage.textContent = `„${municipalityName(city)}“ wirklich löschen?`;
@@ -845,6 +1209,7 @@
       if (!deleteOpen || deleting) return false;
       deleteOpen = false;
       deleteTarget = null;
+      syncDocumentModalState();
       setHidden(elements.deleteCityModalOverlay, true);
       elements.deleteCityModalOverlay.setAttribute("aria-hidden", "true");
       const focusTarget = previousFocus;
@@ -857,7 +1222,7 @@
     async function confirmDeleteCity() {
       if (!deleteOpen || !deleteTarget || deleting) return;
       if (deleteTarget.id === activeCityId && !isCityChangeAllowed()) {
-        elements.deleteCityStatus.textContent = "Die aktive Stadt kann während einer laufenden Runde nicht gelöscht werden.";
+        elements.deleteCityStatus.textContent = "Die aktive Stadt kann während eines anderen Stadtvorgangs nicht gelöscht werden.";
         return;
       }
       deleting = true;
@@ -866,11 +1231,12 @@
       elements.deleteCityStatus.textContent = "Stadt wird gelöscht …";
       const target = deleteTarget;
       try {
-        await storage.deleteCity(target.id);
+        await removeCity(target.id);
         await refreshInstalledCities();
         deleting = false;
         deleteOpen = false;
         deleteTarget = null;
+        syncDocumentModalState();
         setHidden(elements.deleteCityModalOverlay, true);
         elements.deleteCityModalOverlay.setAttribute("aria-hidden", "true");
         setHeaderStatus(`${municipalityName(target)} wurde lokal gelöscht. Statistikdaten blieben unverändert.`);
@@ -935,12 +1301,15 @@
       listenersBound = true;
       elements.citySelectorButton.addEventListener("click", () => setMenuOpen(!menuOpen));
       elements.addCityButton.addEventListener("click", () => open(elements.addCityButton));
+      elements.importCityButton.addEventListener("click", requestCityImport);
+      elements.cityImportFileInput.addEventListener("change", handleImportFileSelection);
       elements.citySearchForm.addEventListener("submit", performSearch);
       elements.municipalityActionButton.addEventListener("click", handleMunicipalityAction);
       elements.cancelCityDownloadButton.addEventListener("click", () => cancelDownload());
       elements.toggleWarningDetailsButton.addEventListener("click", toggleWarningDetails);
       elements.cancelValidationButton.addEventListener("click", cancelValidation);
       elements.saveCityButton.addEventListener("click", saveValidatedCity);
+      elements.activateImportedCityButton.addEventListener("click", activateCompletedImport);
       elements.closeCompletedButton.addEventListener("click", close);
       elements.closeCityManagerButton.addEventListener("click", close);
       elements.cancelDeleteCityButton.addEventListener("click", closeDeleteDialog);
@@ -959,6 +1328,9 @@
 
     async function init(initOptions = {}) {
       if (typeof initOptions.canChangeCity === "function") canChangeCity = initOptions.canChangeCity;
+      if (typeof initOptions.activateCity === "function") activateCityCallback = initOptions.activateCity;
+      if (typeof initOptions.deleteCity === "function") deleteCityCallback = initOptions.deleteCity;
+      if (typeof initOptions.getRuntimeCity === "function") getRuntimeCity = initOptions.getRuntimeCity;
       if (initialized) {
         await refreshInstalledCities();
         return api;
@@ -973,6 +1345,8 @@
       setHidden(elements.deleteCityModalOverlay, true);
       elements.deleteCityModalOverlay.setAttribute("aria-hidden", "true");
       render();
+      renderInstalledCities();
+      syncDocumentModalState();
       await refreshInstalledCities();
       return api;
     }
@@ -989,6 +1363,11 @@
         selectedMunicipality,
         selectedMunicipalityInstalled,
         validatedPackage,
+        workflowSource,
+        importedAlreadyInstalled,
+        importedActiveCity,
+        completedCity,
+        completedActivationAvailable,
         deleteOpen,
         deleteTarget
       };
@@ -1006,6 +1385,7 @@
   }
 
   return Object.freeze({
+    getUserFriendlyCityError,
     init: options => getDefaultManager().init(options),
     open: opener => getDefaultManager().open(opener),
     close: options => getDefaultManager().close(options),

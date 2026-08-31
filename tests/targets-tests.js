@@ -3,6 +3,7 @@
 const assert = require("assert");
 const fs = require("fs");
 const vm = require("vm");
+const geometryApi = require("../geometry.js");
 const targetApi = require("../targets.js");
 
 const dataContext = {};
@@ -129,6 +130,114 @@ assert.ok(preparedPois.filter(target => target.geometryScope === "site")
   .every(target => target.geometrySourceUrl && target.geometryCheckedAt),
 "Geländequellen müssen durch das gemeinsame Zielmodell weitergereicht werden");
 
+const installedStreetInput = [{
+  id: "osm-relation-1001:street-alpha",
+  cityId: "osm-relation-1001",
+  name: "Alphaallee",
+  aliases: ["Alpha-Allee"],
+  geometry: {
+    type: "MultiLineString",
+    coordinates: [
+      [[9.1, 48.1], [9.11, 48.11]],
+      [[9.12, 48.12], [9.13, 48.13]]
+    ]
+  },
+  osmWayIds: [101, 102]
+}];
+const installedStreetSnapshot = JSON.parse(JSON.stringify(installedStreetInput));
+const installedStreetTargets = targetApi.prepareStreetTargets(installedStreetInput, geometryApi);
+assert.equal(installedStreetTargets.length, 1);
+assert.equal(installedStreetTargets[0].cityId, "osm-relation-1001");
+assert.equal(installedStreetTargets[0].displayName, "Alphaallee");
+assert.equal(installedStreetTargets[0].geometry.type, "MultiLineString");
+assert.deepEqual(installedStreetTargets[0].geometry.sections, [
+  [[9.1, 48.1], [9.11, 48.11]],
+  [[9.12, 48.12], [9.13, 48.13]]
+], "Persistierte GeoJSON-Koordinaten müssen einmalig in Runtime-Sections überführt werden");
+assert.equal(installedStreetTargets[0].geometry.streetId, installedStreetInput[0].id);
+assert.deepEqual(installedStreetTargets[0].geometry.featureIds, ["way/101", "way/102"]);
+assert.equal(targetApi.isValidTargetGeometry(installedStreetTargets[0], geometryApi), true,
+  "Die aus IndexedDB-Geometrie erzeugte Straße muss unmittelbar spielbar sein");
+assert.deepEqual(installedStreetInput, installedStreetSnapshot,
+  "Die Target-Aufbereitung darf das gespeicherte Straßenobjekt nicht mutieren");
+
+const preparedStreetSnapshot = JSON.parse(JSON.stringify(installedStreetTargets));
+const preparedStreetAgain = targetApi.prepareStreetTargets(installedStreetTargets, geometryApi);
+assert.deepEqual(preparedStreetAgain[0].geometry, installedStreetTargets[0].geometry,
+  "Eine bereits adaptierte Runtime-Geometrie darf nicht ein zweites Mal konvertiert werden");
+assert.deepEqual(installedStreetTargets, preparedStreetSnapshot,
+  "Auch die idempotente Aufbereitung darf ihren Input nicht mutieren");
+
+const legacyStreetTargets = targetApi.prepareStreetTargets([
+  { id: "legacy-street", name: "Legacyweg", aliases: [] }
+], geometryApi);
+assert.equal(legacyStreetTargets[0].geometry, null,
+  "Legacy-Oberasbach-Straßen ohne lokale Geometrie müssen den bisherigen Null-Fallback behalten");
+
+const installedPoiInput = [
+  {
+    id: "osm-relation-1001:poi:node-1",
+    cityId: "osm-relation-1001",
+    name: "Feuerwehr Alpha",
+    aliases: ["FF Alpha"],
+    category: "fire_station",
+    categoryLabel: "Feuerwehr",
+    position: { lat: 48.101, lon: 9.101 },
+    geometry: null
+  },
+  {
+    id: "osm-relation-1001:poi:way-2",
+    cityId: "osm-relation-1001",
+    name: "Alphaschule",
+    aliases: [],
+    category: "school",
+    categoryLabel: "Schule",
+    position: { lat: 48.105, lon: 9.105 },
+    geometry: {
+      type: "Polygon",
+      coordinates: [[
+        [9.1, 48.1], [9.11, 48.1], [9.11, 48.11], [9.1, 48.1]
+      ]]
+    }
+  },
+  {
+    id: "osm-relation-1001:poi:relation-3",
+    cityId: "osm-relation-1001",
+    name: "Alpha-Marktzentrum",
+    aliases: [],
+    category: "supermarket",
+    categoryLabel: "Supermarkt",
+    position: { lat: 48.125, lon: 9.125 },
+    geometry: {
+      type: "MultiPolygon",
+      coordinates: [
+        [[[9.12, 48.12], [9.13, 48.12], [9.13, 48.13], [9.12, 48.12]]],
+        [[[9.14, 48.14], [9.15, 48.14], [9.15, 48.15], [9.14, 48.14]]]
+      ]
+    }
+  }
+];
+const installedPoiSnapshot = JSON.parse(JSON.stringify(installedPoiInput));
+const installedPoiTargets = targetApi.preparePoiTargets(installedPoiInput);
+const installedPointTarget = installedPoiTargets[0];
+assert.equal(installedPointTarget.displayName, "Feuerwehr Alpha");
+assert.equal(installedPointTarget.cityId, "osm-relation-1001");
+assert.equal(installedPointTarget.latitude, 48.101);
+assert.equal(installedPointTarget.longitude, 9.101);
+assert.deepEqual(installedPointTarget.geometry, {
+  type: "Point",
+  coordinates: [9.101, 48.101]
+}, "Ein installierter Positions-POI ohne Fläche muss ein lokales Point-Ziel erhalten");
+assert.equal(installedPoiTargets[1].displayName, "Alphaschule");
+assert.equal(installedPoiTargets[1].geometry.type, "Polygon");
+assert.equal(installedPoiTargets[2].displayName, "Alpha-Marktzentrum");
+assert.equal(installedPoiTargets[2].geometry.type, "MultiPolygon");
+assert.ok(installedPoiTargets.every(target =>
+  targetApi.isValidTargetGeometry(target, geometryApi)),
+"Point, Polygon und MultiPolygon aus installierten Stadtpaketen müssen spielbar sein");
+assert.deepEqual(installedPoiInput, installedPoiSnapshot,
+  "Die Target-Aufbereitung darf installierte POI-Datensätze nicht mutieren");
+
 const geometryStub = {
   prepareStreetRecords: streets => streets.map(street => ({
     id: street.id,
@@ -136,6 +245,7 @@ const geometryStub = {
     aliases: []
   })),
   isValidStreetGeometry: geometry => geometry?.type === "MultiLineString",
+  extractLineSections: () => [],
   findNearestPointOnSections: () => ({
     distanceMeters: 123,
     nearestCoordinate: [10.95, 49.42],
@@ -244,5 +354,8 @@ console.log("Ziel- und POI-Tests erfolgreich:");
 console.log("- eindeutige, kategorisierte lokale POI-Daten mit Prüfkennzeichnung");
 console.log("- Gerätehäuser und deaktivierte Daten von der Quiz-Auswahl ausgeschlossen");
 console.log("- neun geprüfte OSM-Gelände mit Quellenmetadaten und innenliegenden Referenzpunkten");
+console.log("- installierte GeoJSON-Straßen einmalig und ohne Inputmutation in Runtime-Sections adaptiert");
+console.log("- Legacy-Straßen ohne Geometrie behalten den isolierten Null-Fallback");
+console.log("- installierte Positions-, Polygon- und MultiPolygon-POIs in das gemeinsame Zielmodell überführt");
 console.log("- strikte Validierung für Punkte, Polygone, Innenlöcher und MultiPolygone");
 console.log("- eigene POI-Entfernung und POI-Punktekurve");
