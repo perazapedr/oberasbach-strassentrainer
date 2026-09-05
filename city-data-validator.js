@@ -37,6 +37,7 @@
   const CURATED_POI_MATCH_DISTANCE_METERS = 75;
   const COORDINATE_EPSILON = 1e-10;
   const CITY_PACKAGE_SCHEMA_VERSION = 1;
+  const MIN_AREA_PLAYABLE_STREETS = 5;
   // A download with fewer distinct playable street targets does not provide a
   // meaningful training round. Curated/imported packages keep their established
   // validation contract; the CityManager explicitly selects download mode.
@@ -441,9 +442,35 @@
     return "outside";
   }
 
+  function extractCoordinatePairs(coords) {
+    const points = [];
+    function recurse(c) {
+      if (!Array.isArray(c) || c.length === 0) return;
+      if (typeof c[0] === "number" && typeof c[1] === "number") {
+        points.push(c);
+      } else {
+        for (const item of c) recurse(item);
+      }
+    }
+    recurse(coords);
+    return points;
+  }
+
   function geometryBounds(geometry) {
-    const coordinates = geometryRings(geometry).flat();
-    return coordinateBounds(coordinates);
+    if (!geometry || !geometry.coordinates) return null;
+    const pairs = extractCoordinatePairs(geometry.coordinates);
+    if (pairs.length === 0) return null;
+    return coordinateBounds(pairs);
+  }
+
+  function normalizeBounds(b) {
+    if (!b || typeof b !== "object") return null;
+    const minLat = Number(b.minLat ?? b.south);
+    const maxLat = Number(b.maxLat ?? b.north);
+    const minLon = Number(b.minLon ?? b.west);
+    const maxLon = Number(b.maxLon ?? b.east);
+    if ([minLat, maxLat, minLon, maxLon].some(v => !Number.isFinite(v))) return null;
+    return { minLat, maxLat, minLon, maxLon };
   }
 
   function areaGeometryIntersectsPrepared(firstGeometry, secondPrepared, profiler) {
@@ -639,7 +666,8 @@
     const municipality = { valid: true, warnings: [], errors: [] };
     const streets = createSection(Array.isArray(cityPackage?.streets) ? cityPackage.streets.length : 0);
     const pois = createSection(Array.isArray(cityPackage?.pois) ? cityPackage.pois.length : 0);
-    return { municipality, streets, pois };
+    const areas = createSection(Array.isArray(cityPackage?.areas) ? cityPackage.areas.length : 0);
+    return { municipality, streets, pois, areas };
   }
 
   function addMunicipalityError(validation, code, cityId, message, details) {
@@ -684,6 +712,190 @@
       }
     }
     return null;
+  }
+
+  function validateImportedArea(area, cityId) {
+    const entityId = area && trimmedString(area.id);
+    if (!area || typeof area !== "object" || Array.isArray(area)) {
+      return issue("AREA_INVALID", "error", "area", null, "Der Gebiets-Datensatz ist ungültig.");
+    }
+    if (!entityId) return issue("AREA_ID_MISSING", "error", "area", null, "Die Gebiets-ID fehlt.");
+    if (cityId && area.cityId !== cityId) {
+      return issue("AREA_CITY_ID_INVALID", "error", "area", entityId, "Das Gebiet verweist nicht auf die importierte Stadt.");
+    }
+    if (!trimmedString(area.name)) {
+      return issue("AREA_NAME_MISSING", "error", "area", entityId, "Der Gebietsname fehlt.");
+    }
+    if (!validateBounds(area.bounds)) {
+      return issue("AREA_BOUNDS_INVALID", "error", "area", entityId, "Die Gebiets-Bounds sind ungültig.");
+    }
+    if (area.center !== undefined && area.center !== null && !validPosition(area.center)) {
+      return issue("AREA_CENTER_INVALID", "error", "area", entityId, "Der Gebietsmittelpunkt ist ungültig.");
+    }
+    const geomCandidate = area.geometry
+      || (area.polygon && typeof area.polygon === "object" ? area.polygon : null)
+      || (area.boundary && typeof area.boundary === "object" ? area.boundary : null);
+    if (geomCandidate && !validAreaGeometry(geomCandidate)) {
+      return issue("AREA_BOUNDARY_INVALID", "error", "area", entityId, "Die Gebietsgeometrie ist ungültig.");
+    }
+    if (!geomCandidate && area.boundary && typeof area.boundary !== "string") {
+      return issue("AREA_BOUNDARY_INVALID", "error", "area", entityId, "Die Gebietsgeometrie ist ungültig.");
+    }
+    return null;
+  }
+
+  function findAreaParentCycle(areas) {
+    if (!Array.isArray(areas)) return null;
+    const parentMap = new Map();
+    for (const area of areas) {
+      const id = trimmedString(area?.id);
+      const parentId = trimmedString(area?.parentAreaId || area?.parentId);
+      if (id && parentId) {
+        if (id === parentId) return id;
+        parentMap.set(id, parentId);
+      }
+    }
+
+    for (const [startId] of parentMap) {
+      const visited = new Set([startId]);
+      let current = parentMap.get(startId);
+      while (current) {
+        if (visited.has(current)) {
+          return current;
+        }
+        visited.add(current);
+        current = parentMap.get(current);
+      }
+    }
+    return null;
+  }
+
+  function assignAreasToEntities(areas, streets, pois, profiler = createProfiler(null)) {
+    if (!Array.isArray(areas) || areas.length === 0) {
+      if (Array.isArray(streets)) {
+        for (const street of streets) {
+          if (!Array.isArray(street.areaIds)) street.areaIds = [];
+        }
+      }
+      if (Array.isArray(pois)) {
+        for (const poi of pois) {
+          if (!Array.isArray(poi.areaIds)) poi.areaIds = [];
+        }
+      }
+      return [];
+    }
+
+    const startedAt = profiler.start();
+
+    const preparedAreas = [];
+    for (const area of areas) {
+      const geom = area.geometry
+        || (area.polygon && typeof area.polygon === "object" ? area.polygon : null)
+        || (area.boundary && typeof area.boundary === "object" ? area.boundary : null);
+      const boundaryValid = geom && validAreaGeometry(geom);
+      const prepared = boundaryValid ? prepareAreaGeometry(geom) : null;
+      const rawBounds = normalizeBounds(area.bounds);
+      const bounds = rawBounds || (boundaryValid ? geometryBounds(geom) : null);
+      preparedAreas.push({
+        area,
+        boundary: boundaryValid ? geom : null,
+        prepared,
+        bounds,
+        matchingStreetIds: new Set(),
+        matchingPoiIds: new Set()
+      });
+    }
+
+    if (Array.isArray(streets)) {
+      for (const street of streets) {
+        if (!Array.isArray(street.areaIds)) street.areaIds = [];
+        if (!street.geometry) continue;
+        const streetBounds = geometryBounds(street.geometry);
+
+        for (const entry of preparedAreas) {
+          profiler.increment("streetAreaCandidateChecks");
+          if (entry.bounds && streetBounds && !boundsOverlap(streetBounds, entry.bounds)) {
+            continue;
+          }
+          profiler.increment("streetAreaExactChecks");
+          if (entry.prepared && entry.boundary) {
+            const classification = classifyStreetAgainstBoundary(street.geometry, entry.boundary, entry.prepared, profiler);
+            if (classification === "inside" || classification === "partial") {
+              if (!street.areaIds.includes(entry.area.id)) {
+                street.areaIds.push(entry.area.id);
+              }
+              entry.matchingStreetIds.add(street.id);
+            }
+          }
+        }
+      }
+    }
+
+    if (Array.isArray(pois)) {
+      for (const poi of pois) {
+        if (!Array.isArray(poi.areaIds)) poi.areaIds = [];
+        const lat = Number(poi.latitude ?? poi.position?.lat);
+        const lon = Number(poi.longitude ?? poi.position?.lon);
+        const hasPoint = Number.isFinite(lat) && Number.isFinite(lon);
+        const point = hasPoint ? [lon, lat] : null;
+
+        for (const entry of preparedAreas) {
+          profiler.increment("poiAreaCandidateChecks");
+          if (entry.bounds && hasPoint) {
+            if (lat < entry.bounds.minLat || lat > entry.bounds.maxLat
+              || lon < entry.bounds.minLon || lon > entry.bounds.maxLon) {
+              continue;
+            }
+          }
+          profiler.increment("poiAreaExactChecks");
+          let matched = false;
+          if (point && entry.prepared) {
+            if (pointLocationInPreparedGeometry(point, entry.prepared, profiler) >= 0) {
+              matched = true;
+            }
+          }
+          if (!matched && poi.geometry && entry.prepared && validAreaGeometry(poi.geometry)) {
+            if (areaGeometryIntersectsPrepared(poi.geometry, entry.prepared, profiler)) {
+              matched = true;
+            }
+          }
+          if (matched) {
+            if (!poi.areaIds.includes(entry.area.id)) {
+              poi.areaIds.push(entry.area.id);
+            }
+            entry.matchingPoiIds.add(poi.id);
+          }
+        }
+      }
+    }
+
+    const validAreas = [];
+    for (const entry of preparedAreas) {
+      const streetCount = entry.matchingStreetIds.size;
+      const poiCount = entry.matchingPoiIds.size;
+      if (streetCount >= MIN_AREA_PLAYABLE_STREETS) {
+        validAreas.push({
+          ...cloneValue(entry.area),
+          streetCount,
+          poiCount
+        });
+      }
+    }
+
+    const validAreaIds = new Set(validAreas.map(a => a.id));
+    if (Array.isArray(streets)) {
+      for (const street of streets) {
+        street.areaIds = street.areaIds.filter(id => validAreaIds.has(id));
+      }
+    }
+    if (Array.isArray(pois)) {
+      for (const poi of pois) {
+        poi.areaIds = poi.areaIds.filter(id => validAreaIds.has(id));
+      }
+    }
+
+    profiler.end("areaAssignmentMs", startedAt);
+    return validAreas;
   }
 
   function validateCityPackage(cityPackage) {
@@ -794,6 +1006,42 @@
         }
       }
 
+      if (input.areas !== undefined) {
+        if (!Array.isArray(input.areas)) {
+          addError(validation.areas, issue("CITY_AREAS_INVALID", "error", "city", rawCityId,
+            "Das Stadtpaket enthält kein gültiges Gebiete-Array."));
+        } else {
+          const areaIds = new Set();
+          const streetIds = new Set(Array.isArray(input.streets)
+            ? input.streets.map(street => trimmedString(street?.id)).filter(Boolean)
+            : []);
+          const poiIds = new Set(Array.isArray(input.pois)
+            ? input.pois.map(poi => trimmedString(poi?.id)).filter(Boolean)
+            : []);
+
+          for (const area of input.areas) {
+            const areaError = validateImportedArea(area, rawCityId);
+            if (areaError) addError(validation.areas, areaError);
+            const areaId = trimmedString(area?.id);
+            if (areaId && areaIds.has(areaId)) {
+              addError(validation.areas, issue("AREA_ID_DUPLICATE", "error", "area", areaId,
+                "Die Stadtdatei enthält doppelte Gebiets-IDs."));
+            }
+            if (areaId && (streetIds.has(areaId) || poiIds.has(areaId))) {
+              addError(validation.areas, issue("CITY_ENTITY_ID_DUPLICATE", "error", "area", areaId,
+                "Eine ID wird gleichzeitig für ein Gebiet und eine andere Entität verwendet."));
+            }
+            if (areaId) areaIds.add(areaId);
+          }
+
+          const cycleNode = findAreaParentCycle(input.areas);
+          if (cycleNode) {
+            addError(validation.areas, issue("AREA_PARENT_CYCLE", "error", "area", cycleNode,
+              "Die Hierarchie der Trainingsgebiete enthält einen Zyklus."));
+          }
+        }
+      }
+
       if (city && Array.isArray(input.streets) && city.streetCount !== undefined
         && city.streetCount !== input.streets.length) {
         addMunicipalityError(validation, "CITY_STREET_COUNT_INVALID", rawCityId,
@@ -812,10 +1060,13 @@
     validation.pois.totalOutput = validation.pois.errors.length === 0 && Array.isArray(input?.pois)
       ? input.pois.length
       : 0;
+    validation.areas.totalOutput = validation.areas.errors.length === 0 && Array.isArray(input?.areas)
+      ? input.areas.length
+      : 0;
     const warningCount = validation.municipality.warnings.length
-      + validation.streets.warnings.length + validation.pois.warnings.length;
+      + validation.streets.warnings.length + validation.pois.warnings.length + validation.areas.warnings.length;
     const errorCount = validation.municipality.errors.length
-      + validation.streets.errors.length + validation.pois.errors.length;
+      + validation.streets.errors.length + validation.pois.errors.length + validation.areas.errors.length;
     const valid = errorCount === 0;
     validation.valid = valid;
     validation.summary = { warningCount, errorCount };
@@ -827,6 +1078,7 @@
       city: valid ? cloneValue(input.city) : null,
       streets: valid ? cloneValue(input.streets) : [],
       pois: valid ? cloneValue(input.pois) : [],
+      areas: valid && Array.isArray(input?.areas) ? cloneValue(input.areas) : [],
       validation
     };
   }
@@ -1481,6 +1733,24 @@
       municipality.valid = false;
     }
 
+    const rawAreas = Array.isArray(input.areas) ? input.areas : [];
+    let validatedAreas = [];
+    if (rawAreas.length > 0 && cityId) {
+      const validRawAreas = [];
+      for (const area of rawAreas) {
+        const areaError = validateImportedArea(area, cityId);
+        if (!areaError) {
+          validRawAreas.push(area);
+        }
+      }
+      const cycleNode = findAreaParentCycle(validRawAreas);
+      if (!cycleNode) {
+        validatedAreas = assignAreasToEntities(validRawAreas, validatedStreets, validatedPois, profiler);
+      }
+    } else {
+      assignAreasToEntities([], validatedStreets, validatedPois, profiler);
+    }
+
     const validatedCity = city ? {
       ...city,
       streetCount: validatedStreets.length,
@@ -1505,6 +1775,7 @@
       city: validatedCity,
       streets: validatedStreets,
       pois: validatedPois,
+      areas: validatedAreas,
       boundary,
       validation
     };
@@ -1835,12 +2106,16 @@
     SUPPORTED_POI_CATEGORIES,
     CITY_PACKAGE_SCHEMA_VERSION,
     MIN_PLAYABLE_STREETS,
+    MIN_AREA_PLAYABLE_STREETS,
     STREET_MERGE_DISTANCE_METERS,
     POI_POSSIBLE_DUPLICATE_DISTANCE_METERS,
     CURATED_POSITION_DIFFERENCE_METERS,
     CURATED_POI_MATCH_DISTANCE_METERS,
     validateCityData,
     validateCityPackage,
-    compareWithCuratedData
+    compareWithCuratedData,
+    assignAreasToEntities,
+    validateArea: validateImportedArea,
+    findAreaParentCycle
   });
 });

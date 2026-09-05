@@ -6,13 +6,9 @@
   <meta name="theme-color" content="#9f1d2d" />
   <title>Straßentrainer Oberasbach</title>
 
-  <link
-    rel="stylesheet"
-    href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
-    integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY="
-    crossorigin=""
-  />
-  <link rel="stylesheet" href="styles.css?v=9.0" />
+  <link rel="manifest" href="manifest.webmanifest" />
+  <link rel="stylesheet" href="vendor/leaflet/leaflet.css" />
+  <link rel="stylesheet" href="styles.css?v=13.1" />
 </head>
 <body>
   <main class="app-shell">
@@ -60,6 +56,11 @@
       </div>
     </header>
 
+    <aside id="offlineBanner" class="offline-banner hidden" role="status" aria-live="polite">
+      <span class="offline-banner-icon" aria-hidden="true">⚡</span>
+      <span class="offline-banner-text">Offline · Bereits installierte Städte können weiterhin verwendet werden.</span>
+    </aside>
+
     <section class="game-layout">
       <aside class="control-panel">
         <section id="modeCard" class="mode-card">
@@ -69,6 +70,13 @@
               <option value="free">Freier Modus</option>
               <option value="timed">Zeitmodus</option>
               <option value="exam">Prüfungsmodus</option>
+            </select>
+          </div>
+
+          <div id="trainingAreaFieldGroup" class="field-group hidden">
+            <label for="trainingAreaSelect">Trainingsgebiet</label>
+            <select id="trainingAreaSelect">
+              <option value="">Gesamte Stadt</option>
             </select>
           </div>
 
@@ -416,12 +424,8 @@
 
   <noscript>Diese Anwendung benötigt JavaScript.</noscript>
 
-  <script
-    src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
-    integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
-    crossorigin=""
-  ></script>
-  <script src="https://cdn.jsdelivr.net/npm/@turf/turf@7.3.0/turf.min.js"></script>
+  <script src="vendor/leaflet/leaflet.js"></script>
+  <script src="vendor/turf/turf.min.js"></script>
   <script src="geometry.js?v=6.2"></script>
   <script src="targets.js?v=6.2"></script>
   <script src="statistics.js?v=7.0"></script>

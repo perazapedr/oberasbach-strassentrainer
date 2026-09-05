@@ -28,8 +28,16 @@
   function getUserFriendlyCityError(error, context) {
     const code = asText(error && error.code);
     const status = Number(error && error.status) || 0;
+    const isOnline = typeof error?.navigatorOnline === "boolean"
+      ? error.navigatorOnline
+      : (typeof navigator !== "undefined" && typeof navigator.onLine === "boolean"
+        ? navigator.onLine
+        : true);
 
     if (context === "search") {
+      if (!isOnline) {
+        return "Für die Suche nach neuen Städten wird eine Internetverbindung benötigt.\n\nBereits installierte Städte können weiterhin gespielt werden.";
+      }
       if (code === "TIMEOUT") {
         return "Die Stadtsuche dauert momentan ungewöhnlich lange. Bitte versuche es erneut.";
       }
@@ -59,13 +67,16 @@
       return "Der Download hat zu lange gedauert. Bitte versuche es erneut.";
     }
     if (code === "NETWORK_ERROR") {
-      return "Der OpenStreetMap-Datendienst konnte nicht erreicht werden. Bitte prüfe deine Internetverbindung und versuche es erneut.";
+      if (!isOnline) {
+        return "Du bist momentan offline.\n\nFür das Herunterladen neuer Städte wird eine Internetverbindung benötigt. Bereits installierte Städte können weiterhin gespielt werden.";
+      }
+      return "Der OpenStreetMap-Datendienst konnte momentan nicht erreicht werden.\n\nDeine Internetverbindung scheint grundsätzlich zu bestehen. Bitte versuche den Download in Kürze erneut.";
     }
     if (code === "HTTP_ERROR" && status === 429) {
-      return "Der OpenStreetMap-Datendienst erhält momentan sehr viele Anfragen. Bitte warte kurz und versuche den Download erneut.";
+      return "Der OpenStreetMap-Datendienst ist momentan stark ausgelastet (sehr viele Anfragen). Bitte warte kurz und versuche es in Kürze erneut.";
     }
     if (code === "HTTP_ERROR" && [502, 503, 504].includes(status)) {
-      return "Der OpenStreetMap-Datendienst ist momentan ausgelastet. Die Stadt konnte deshalb nicht vollständig geladen werden. Bitte versuche es erneut.";
+      return "Der OpenStreetMap-Datendienst ist momentan ausgelastet und nicht verfügbar. Die Stadt konnte deshalb nicht vollständig geladen werden. Bitte versuche es später erneut.";
     }
     if (code === "HTTP_ERROR" && (status === 500 || status >= 500)) {
       return "Der OpenStreetMap-Datendienst hat einen vorübergehenden Serverfehler gemeldet. Bitte versuche den Download erneut.";
@@ -842,6 +853,15 @@
         render();
         return;
       }
+      if (typeof navigator !== "undefined" && navigator.onLine === false) {
+        cancelSearch();
+        phase = STATES.ERROR;
+        errorContext = "search";
+        alertMessage = "Für die Suche nach neuen Städten wird eine Internetverbindung benötigt.\n\nBereits installierte Städte können weiterhin gespielt werden.";
+        render();
+        announce(alertMessage);
+        return;
+      }
       if (phase === STATES.SEARCHING && query === lastSearchQuery) return;
 
       workflowSource = "download";
@@ -999,6 +1019,17 @@
       const retryingFailedDownload = phase === STATES.ERROR && errorContext === "download";
       if ((!retryingFailedDownload && phase !== STATES.MUNICIPALITY_SELECTED)
         || !selectedMunicipality || selectedMunicipalityInstalled) return;
+
+      if (typeof navigator !== "undefined" && navigator.onLine === false) {
+        cancelDownload({ closing: true });
+        phase = STATES.ERROR;
+        errorContext = "download";
+        alertMessage = "Du bist momentan offline.\n\nFür das Herunterladen neuer Städte wird eine Internetverbindung benötigt. Bereits installierte Städte können weiterhin gespielt werden.";
+        render();
+        announce(alertMessage);
+        return;
+      }
+
       cancelDownload({ closing: true });
       workflowSource = "download";
       const operationId = ++downloadOperationId;
@@ -1017,6 +1048,7 @@
       try {
         const downloaded = await osmService.fetchCityData(selectedMunicipality, {
           signal: controller.signal,
+          discoverAreas: true,
           onProgress: nextProgress => {
             if (operationId !== downloadOperationId || phase !== STATES.DOWNLOADING || !modalOpen) return;
             progress = {
@@ -1058,6 +1090,10 @@
           : getUserFriendlyCityError(error, "download");
         render();
         announce(alertMessage);
+        if (typeof console !== "undefined" && typeof console.warn === "function") {
+          const diag = error && (error.diagnostics || (typeof osmService?.formatOverpassErrorDiagnostics === "function" && osmService.formatOverpassErrorDiagnostics(error)));
+          if (diag) console.warn(diag);
+        }
       } finally {
         if (operationId === downloadOperationId) downloadController = null;
       }
@@ -1095,7 +1131,12 @@
             throw new Error("Die bisherige aktive Stadt konnte nicht für ein sicheres Ersetzen gelesen werden.");
           }
         }
-        await storage.saveCity(validatedPackage.city, validatedPackage.streets, validatedPackage.pois);
+        await storage.saveCity(
+          validatedPackage.city,
+          validatedPackage.streets,
+          validatedPackage.pois,
+          validatedPackage.areas || []
+        );
         citySaved = true;
         if (workflowSource === "download" || importedActiveCity) {
           await activateCity(validatedPackage.city.id, { force: true });
@@ -1122,7 +1163,8 @@
             await storage.saveCity(
               previousActivePackage.city,
               previousActivePackage.streets,
-              previousActivePackage.pois
+              previousActivePackage.pois,
+              previousActivePackage.areas || []
             );
             rollbackSucceeded = true;
           } catch (_) {
@@ -1232,6 +1274,11 @@
       const target = deleteTarget;
       try {
         await removeCity(target.id);
+        try {
+          if (typeof localStorage !== "undefined" && typeof localStorage.removeItem === "function") {
+            localStorage.removeItem("strassentrainer.trainingArea." + target.id);
+          }
+        } catch (_) {}
         await refreshInstalledCities();
         deleting = false;
         deleteOpen = false;

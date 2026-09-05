@@ -1,0 +1,12 @@
+{
+  "name": "Straßentrainer",
+  "short_name": "Straßentrainer",
+  "description": "Offline-fähiger Straßentrainer für deutsche Gemeinden",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#edf1f4",
+  "theme_color": "#9f1d2d",
+  "lang": "de"
+}
+

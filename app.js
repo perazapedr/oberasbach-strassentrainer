@@ -93,10 +93,13 @@ const els = {
   scorePointsPanel: document.getElementById("scorePointsPanel"),
   statusCard: document.getElementById("statusCard"),
   statusText: document.getElementById("statusText"),
+  offlineBanner: document.getElementById("offlineBanner"),
   mapHint: document.getElementById("mapHint"),
   mapPanel: document.getElementById("mapPanel"),
   modeCard: document.getElementById("modeCard"),
   modeSelect: document.getElementById("modeSelect"),
+  trainingAreaFieldGroup: document.getElementById("trainingAreaFieldGroup"),
+  trainingAreaSelect: document.getElementById("trainingAreaSelect"),
   timedSettings: document.getElementById("timedSettings"),
   secondsPerRoundSelect: document.getElementById("secondsPerRoundSelect"),
   totalRoundsSelect: document.getElementById("totalRoundsSelect"),
@@ -158,6 +161,10 @@ const els = {
   statisticsImportInput: document.getElementById("statisticsImportInput"),
   statisticsMessage: document.getElementById("statisticsMessage")
 };
+
+if (typeof L !== "undefined" && L.Icon && L.Icon.Default) {
+  L.Icon.Default.imagePath = "vendor/leaflet/images/";
+}
 
 const map = L.map("map", {
   center: [51, 10],
@@ -331,6 +338,51 @@ function normalizeCityMetadata(metadata) {
   };
 }
 
+function getTrainingAreaStorageKey(cityId) {
+  return `strassentrainer.trainingArea.${cityId}`;
+}
+
+function getSavedTrainingAreaId(cityId) {
+  try {
+    return typeof localStorage !== "undefined"
+      ? localStorage.getItem(getTrainingAreaStorageKey(cityId))
+      : null;
+  } catch (_) {
+    return null;
+  }
+}
+
+function setSavedTrainingAreaId(cityId, areaId) {
+  try {
+    if (typeof localStorage !== "undefined") {
+      if (areaId) {
+        localStorage.setItem(getTrainingAreaStorageKey(cityId), String(areaId).trim());
+      } else {
+        localStorage.removeItem(getTrainingAreaStorageKey(cityId));
+      }
+    }
+  } catch (_) {}
+}
+
+function createAreaLeafletBounds(bounds) {
+  if (!bounds || typeof bounds !== "object") return null;
+  const south = Number(bounds.south);
+  const west = Number(bounds.west);
+  const north = Number(bounds.north);
+  const east = Number(bounds.east);
+  if (![south, west, north, east].every(Number.isFinite) || south >= north || west >= east) {
+    return null;
+  }
+  if (typeof L !== "undefined" && typeof L.latLngBounds === "function") {
+    return L.latLngBounds([south, west], [north, east]);
+  }
+  return {
+    pad: () => createAreaLeafletBounds(bounds),
+    getSouthWest: () => ({ lat: south, lng: west }),
+    getNorthEast: () => ({ lat: north, lng: east })
+  };
+}
+
 function buildCityContext(cityData, diagnostics = null) {
   const contextStartedAt = monotonicNow();
   const sourceType = "installed";
@@ -353,6 +405,12 @@ function buildCityContext(cityData, diagnostics = null) {
   cityData.pois.forEach(poi => {
     if (poi?.cityId !== metadata.id) {
       throw new Error("Das Stadtpaket enthält einen POI aus einer anderen Stadt.");
+    }
+  });
+  const areas = Array.isArray(cityData.areas) ? cityData.areas : [];
+  areas.forEach(area => {
+    if (area?.cityId !== metadata.id) {
+      throw new Error("Das Stadtpaket enthält ein Trainingsgebiet aus einer anderen Stadt.");
     }
   });
 
@@ -389,14 +447,57 @@ function buildCityContext(cityData, diagnostics = null) {
   const fireStations = poiTargets.filter(poi => poi.category === "fire_station"
     || poi.subcategory === "Feuerwehrgerätehaus");
 
+  const allStreetTargets = streetTargets;
+  const allPoiTargets = poiTargets;
+  const allFireStations = fireStations;
+  const cityLeafletBounds = leafletBounds;
+
+  let activeAreaId = null;
+  let activeArea = null;
+  let currentStreetTargets = streetTargets;
+  let currentPoiTargets = poiTargets;
+  let currentFireStations = fireStations;
+  let currentLeafletBounds = leafletBounds;
+
+  const savedAreaId = getSavedTrainingAreaId(metadata.id);
+  if (savedAreaId && areas.some(a => a.id === savedAreaId)) {
+    const foundArea = areas.find(a => a.id === savedAreaId);
+    const filteredStreets = allStreetTargets.filter(
+      s => Array.isArray(s.areaIds) && s.areaIds.includes(foundArea.id)
+    );
+    if (filteredStreets.length >= 1) {
+      activeAreaId = foundArea.id;
+      activeArea = foundArea;
+      currentStreetTargets = filteredStreets;
+      currentPoiTargets = allPoiTargets.filter(
+        p => Array.isArray(p.areaIds) && p.areaIds.includes(foundArea.id)
+      );
+      currentFireStations = allFireStations.filter(
+        f => Array.isArray(f.areaIds) && f.areaIds.includes(foundArea.id)
+      );
+      if (foundArea.bounds) {
+        currentLeafletBounds = createAreaLeafletBounds(foundArea.bounds) || cityLeafletBounds;
+      }
+    } else {
+      setSavedTrainingAreaId(metadata.id, null);
+    }
+  }
+
   const context = {
     sourceType,
     metadata,
-    streetTargets,
-    poiTargets,
+    areas,
+    activeAreaId,
+    activeArea,
+    allStreetTargets,
+    allPoiTargets,
+    allFireStations,
+    cityLeafletBounds,
+    streetTargets: currentStreetTargets,
+    poiTargets: currentPoiTargets,
     poiCategories: categories,
-    fireStations,
-    leafletBounds
+    fireStations: currentFireStations,
+    leafletBounds: currentLeafletBounds
   };
   recordRuntimeTiming(diagnostics, "buildCityContextMs", contextStartedAt);
   return context;
@@ -551,10 +652,149 @@ function applyCityContext(
   const markerStartedAt = monotonicNow();
   renderFireStations();
   recordRuntimeTiming(diagnostics, "fireStationMarkersMs", markerStartedAt);
+  renderTrainingAreaSelect(nextContext);
   renderStatistics();
   const statisticsLoadWarning = statisticsStore.getLoadWarning();
   setStatisticsMessage(statisticsLoadWarning || "", statisticsLoadWarning ? "error" : "");
   recordRuntimeTiming(diagnostics, "applyCityContextMs", applyStartedAt);
+}
+
+function renderTrainingAreaSelect(context) {
+  if (!els.trainingAreaSelect || !els.trainingAreaFieldGroup) return;
+  const areas = Array.isArray(context?.areas) ? context.areas : [];
+  if (areas.length === 0) {
+    els.trainingAreaFieldGroup.classList.add("hidden");
+    els.trainingAreaSelect.innerHTML = '<option value="">Gesamte Stadt</option>';
+    els.trainingAreaSelect.value = "";
+    return;
+  }
+  els.trainingAreaFieldGroup.classList.remove("hidden");
+  els.trainingAreaSelect.innerHTML = "";
+
+  const defaultOption = document.createElement("option");
+  defaultOption.value = "";
+  defaultOption.textContent = "Gesamte Stadt";
+  els.trainingAreaSelect.appendChild(defaultOption);
+
+  const topLevel = areas.filter(a => !a.parentId || !areas.some(p => p.id === a.parentId));
+  const childMap = new Map();
+  for (const area of areas) {
+    if (area.parentId && areas.some(p => p.id === area.parentId)) {
+      if (!childMap.has(area.parentId)) childMap.set(area.parentId, []);
+      childMap.get(area.parentId).push(area);
+    }
+  }
+
+  for (const top of topLevel) {
+    const opt = document.createElement("option");
+    opt.value = top.id;
+    opt.textContent = `${top.name} (${top.streetCount || 0} Straßen)`;
+    els.trainingAreaSelect.appendChild(opt);
+
+    const children = childMap.get(top.id) || [];
+    for (const child of children) {
+      const childOpt = document.createElement("option");
+      childOpt.value = child.id;
+      childOpt.textContent = `  ↳ ${child.name} (${child.streetCount || 0} Straßen)`;
+      els.trainingAreaSelect.appendChild(childOpt);
+    }
+  }
+
+  els.trainingAreaSelect.value = context.activeAreaId || "";
+}
+
+function activateTrainingArea(areaId, options = {}) {
+  if (!cityContext) return false;
+  const normalizedAreaId = areaId ? String(areaId).trim() : "";
+  if (normalizedAreaId === (cityContext.activeAreaId || "")) {
+    return true;
+  }
+
+  const isRoundActive = [GAME_STATUS.ACTIVE, GAME_STATUS.PREPARING].includes(gameState.status);
+  if ((isRoundActive || isExamInProgress()) && !options.force) {
+    const message = isExamInProgress()
+      ? "Die laufende Prüfung wird vollständig verworfen. Möchtest du das Trainingsgebiet wirklich wechseln?"
+      : "Die laufende Runde wird abgebrochen. Möchtest du das Trainingsgebiet wirklich wechseln?";
+    const confirmed = typeof window !== "undefined" && typeof window.confirm === "function"
+      ? window.confirm(message)
+      : false;
+    if (!confirmed) {
+      if (els.trainingAreaSelect) {
+        els.trainingAreaSelect.value = cityContext.activeAreaId || "";
+      }
+      return false;
+    }
+  }
+
+  stopAllTimers();
+  roundPreparationToken += 1;
+  deactivateExamHistoryGuard();
+  examGeometryByRound.clear();
+  gameEngine.resetGame();
+  mapView.clearRound();
+  fireStationLayers.clearLayers();
+  contentRepository.lastTargetId = null;
+  contentRepository.selectedTargetIds.clear();
+  contentRepository.unavailableTargetIds.clear();
+  contentRepository.selectionCounts = { street: 0, poi: 0 };
+
+  const areas = Array.isArray(cityContext.areas) ? cityContext.areas : [];
+  if (normalizedAreaId) {
+    const targetArea = areas.find(a => a.id === normalizedAreaId);
+    if (!targetArea) {
+      console.warn(`Trainingsgebiet ${normalizedAreaId} nicht gefunden.`);
+      return false;
+    }
+    cityContext.activeAreaId = targetArea.id;
+    cityContext.activeArea = targetArea;
+    cityContext.streetTargets = cityContext.allStreetTargets.filter(
+      s => Array.isArray(s.areaIds) && s.areaIds.includes(targetArea.id)
+    );
+    cityContext.poiTargets = cityContext.allPoiTargets.filter(
+      p => Array.isArray(p.areaIds) && p.areaIds.includes(targetArea.id)
+    );
+    cityContext.fireStations = cityContext.allFireStations.filter(
+      f => Array.isArray(f.areaIds) && f.areaIds.includes(targetArea.id)
+    );
+    if (targetArea.bounds) {
+      cityContext.leafletBounds = createAreaLeafletBounds(targetArea.bounds) || cityContext.cityLeafletBounds;
+    }
+    setSavedTrainingAreaId(cityContext.metadata.id, targetArea.id);
+  } else {
+    cityContext.activeAreaId = null;
+    cityContext.activeArea = null;
+    cityContext.streetTargets = cityContext.allStreetTargets;
+    cityContext.poiTargets = cityContext.allPoiTargets;
+    cityContext.fireStations = cityContext.allFireStations;
+    cityContext.leafletBounds = cityContext.cityLeafletBounds;
+    setSavedTrainingAreaId(cityContext.metadata.id, null);
+  }
+
+  contentRepository.streetTargets = cityContext.streetTargets;
+  contentRepository.poiTargets = cityContext.poiTargets;
+
+  renderFireStations();
+
+  if (cityContext.leafletBounds && map) {
+    map.setMaxBounds(cityContext.leafletBounds.pad ? cityContext.leafletBounds.pad(CONFIG.maxBoundsPadding) : null);
+    map.fitBounds(cityContext.leafletBounds, { animate: false, padding: [12, 12] });
+  }
+
+  if (els.trainingAreaSelect) {
+    els.trainingAreaSelect.value = cityContext.activeAreaId || "";
+  }
+
+  if (gameState.config.mode === "free") {
+    renderIdleGame();
+  } else if (isCountdownMode(gameState.config.mode)) {
+    renderCountdownConfiguration(gameState.config.mode);
+  }
+  return true;
+}
+
+function handleTrainingAreaChange() {
+  if (!els.trainingAreaSelect) return;
+  activateTrainingArea(els.trainingAreaSelect.value);
 }
 
 function finishRuntimeReady(warning = null) {
@@ -911,6 +1151,7 @@ function renderTargetCategory(target) {
 }
 
 function renderActiveRound(target) {
+  if (els.trainingAreaSelect) els.trainingAreaSelect.disabled = true;
   els.alarmCard.classList.add("active");
   els.targetStreet.textContent = target.displayName;
   renderTargetCategory(target);
@@ -959,6 +1200,7 @@ async function startRound() {
   mapView.clearRound();
   gameEngine.startRound();
 
+  if (els.trainingAreaSelect) els.trainingAreaSelect.disabled = true;
   els.mainButton.disabled = true;
   els.mainButton.textContent = "Alarm wird vorbereitet …";
   els.targetStreet.textContent = "Zufallsalarm wird ausgelöst …";
@@ -1086,6 +1328,7 @@ function renderRoundResult(result) {
   els.resultCard.classList.remove("hidden");
   els.alarmCard.classList.remove("active");
   els.mainButton.disabled = false;
+  if (els.trainingAreaSelect) els.trainingAreaSelect.disabled = false;
   const isLastTimedRound = gameState.config.mode === "timed"
     && gameState.results.length >= gameState.config.totalRounds;
   els.mainButton.textContent = isLastTimedRound
@@ -1459,6 +1702,7 @@ function handleMainButton() {
 }
 
 function renderIdleGame() {
+  if (els.trainingAreaSelect) els.trainingAreaSelect.disabled = false;
   els.mainButton.classList.remove("hidden");
   els.modeCard.classList.remove("hidden");
   els.modeSelect.value = "free";
@@ -1476,13 +1720,16 @@ function renderIdleGame() {
   const contentLabel = contentSettings.contentSelection === "streets"
     ? "Straßen"
     : (contentSettings.contentSelection === "pois" ? "Orte und Einrichtungen" : "Ziele");
-  els.instruction.textContent = `${availableCount} ${contentLabel} in ${cityName(cityContext?.metadata)} stehen zur Auswahl.`;
+  const areaNamePart = cityContext?.activeArea
+    ? `${cityName(cityContext?.metadata)} (${cityContext.activeArea.name})`
+    : cityName(cityContext?.metadata);
+  els.instruction.textContent = `${availableCount} ${contentLabel} in ${areaNamePart} stehen zur Auswahl.`;
   els.mainButton.disabled = availableCount === 0;
   els.mainButton.textContent = "Ersten Alarm auslösen";
   els.mapHint.textContent = "Die Karte enthält bewusst keine Straßennamen.";
   setStatus(
     availableCount > 0
-      ? `${cityName(cityContext?.metadata)} ist lokal geladen und spielbereit.`
+      ? `${areaNamePart} ist lokal geladen und spielbereit.`
       : "Für die gewählte Inhaltsauswahl ist kein aktives Ziel vorhanden.",
     availableCount > 0 ? "ready" : "error"
   );
@@ -1490,6 +1737,7 @@ function renderIdleGame() {
 }
 
 function renderCountdownConfiguration(mode) {
+  if (els.trainingAreaSelect) els.trainingAreaSelect.disabled = false;
   applyContentSettingsToGameConfig();
   const isExam = mode === "exam";
   els.mainButton.classList.remove("hidden");
@@ -1587,6 +1835,7 @@ function finishGame(options = {}) {
   stopAllTimers();
   roundPreparationToken += 1;
   gameEngine.finishGame(options);
+  if (els.trainingAreaSelect) els.trainingAreaSelect.disabled = false;
   els.alarmCard.classList.remove("active");
   els.targetCategoryLabel.classList.add("hidden");
   mapView.clearRound();
@@ -2106,6 +2355,9 @@ window.STRASSENTRAINER_DEBUG = {
 map.on("click", event => submitGuess(event.latlng));
 els.mainButton.addEventListener("click", handleMainButton);
 els.modeSelect.addEventListener("change", handleModeChange);
+if (els.trainingAreaSelect) {
+  els.trainingAreaSelect.addEventListener("change", handleTrainingAreaChange);
+}
 els.secondsPerRoundSelect.addEventListener("change", refreshConfigurationAfterSettingsChange);
 els.totalRoundsSelect.addEventListener("change", refreshConfigurationAfterSettingsChange);
 els.contentSelectionSelect.addEventListener("change", handleContentSelectionChange);
@@ -2140,6 +2392,31 @@ window.addEventListener("keydown", event => {
   }
 });
 
+function updateOnlineStatus() {
+  if (!els.offlineBanner) return;
+  const isOnline = typeof navigator !== "undefined" && typeof navigator.onLine === "boolean"
+    ? navigator.onLine
+    : true;
+  if (!isOnline) {
+    els.offlineBanner.classList.remove("hidden");
+  } else {
+    els.offlineBanner.classList.add("hidden");
+  }
+}
+if (typeof window !== "undefined" && typeof window.addEventListener === "function") {
+  window.addEventListener("online", updateOnlineStatus);
+  window.addEventListener("offline", updateOnlineStatus);
+}
+updateOnlineStatus();
+
+if (typeof navigator !== "undefined" && "serviceWorker" in navigator) {
+  window.addEventListener("load", () => {
+    navigator.serviceWorker.register("./sw.js", { scope: "./" }).catch(err => {
+      if (CONFIG.debug) console.warn("Service Worker registration failed:", err);
+    });
+  });
+}
+
 const startupPromise = initializeApplication();
 
 window.StrassentrainerRuntime = Object.freeze({
@@ -2148,5 +2425,8 @@ window.StrassentrainerRuntime = Object.freeze({
   deleteCity,
   canChangeCity: canChangeRuntimeCity,
   getActiveCity: () => cityContext?.metadata || null,
-  getStatus: () => ({ status: runtimeState.status, error: runtimeState.error })
+  getStatus: () => ({ status: runtimeState.status, error: runtimeState.error }),
+  activateTrainingArea,
+  getActiveTrainingArea: () => cityContext?.activeArea || null,
+  getTrainingAreas: () => (cityContext?.areas ? [...cityContext.areas] : [])
 });

@@ -802,6 +802,26 @@ test("Nominatim-HTTP- und Netzwerkfehler verwenden die zentrale Erreichbarkeitsm
   assert.match(network, /installierte Städte.*weiterhin gespielt/i);
 });
 
+test("Overpass-Downloadfehler unterscheidet offline vs. online Datendienst-Erreichbarkeit", () => {
+  const offlineError = getUserFriendlyCityError({ code: "NETWORK_ERROR", navigatorOnline: false }, "download");
+  assert.match(offlineError, /Du bist momentan offline/);
+  assert.match(offlineError, /Bereits installierte Städte können weiterhin gespielt werden/);
+
+  const onlineError = getUserFriendlyCityError({ code: "NETWORK_ERROR", navigatorOnline: true }, "download");
+  assert.match(onlineError, /OpenStreetMap-Datendienst konnte momentan nicht erreicht werden/);
+  assert.match(onlineError, /Deine Internetverbindung scheint grundsätzlich zu bestehen/);
+  assert.doesNotMatch(onlineError, /prüfe deine Internetverbindung/);
+
+  const error429 = getUserFriendlyCityError({ code: "HTTP_ERROR", status: 429 }, "download");
+  assert.match(error429, /stark ausgelastet/);
+
+  const error503 = getUserFriendlyCityError({ code: "HTTP_ERROR", status: 503 }, "download");
+  assert.match(error503, /momentan ausgelastet/);
+
+  const timeout = getUserFriendlyCityError({ code: "TIMEOUT" }, "download");
+  assert.match(timeout, /zu lange gedauert/);
+});
+
 test("Gemeindeauswahl verwendet die kanonische OSM-Stadt-ID", async () => {
   const fixture = await setup();
   await openSearchAndSelect(fixture);

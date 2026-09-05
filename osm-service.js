@@ -3,10 +3,16 @@
   const commonJsGeometry = typeof module === "object" && module.exports && typeof require === "function"
     ? require("./geometry.js")
     : null;
-  const api = factory((root && root.StreetGeometry) || commonJsGeometry);
+  const commonJsValidator = typeof module === "object" && module.exports && typeof require === "function"
+    ? require("./city-data-validator.js")
+    : null;
+  const api = factory(
+    (root && root.StreetGeometry) || commonJsGeometry,
+    (root && root.StrassentrainerCityDataValidator) || commonJsValidator
+  );
   if (typeof module === "object" && module.exports) module.exports = api;
   if (root) root.StrassentrainerOsmService = api;
-})(typeof globalThis !== "undefined" ? globalThis : this, function createOsmServiceApi(defaultGeometryApi) {
+})(typeof globalThis !== "undefined" ? globalThis : this, function createOsmServiceApi(defaultGeometryApi, defaultValidatorApi) {
   "use strict";
 
   const NOMINATIM_SEARCH_URL = "https://nominatim.openstreetmap.org/search";
@@ -359,11 +365,29 @@
       `relation(${id})->.boundary;`,
       ".boundary map_to_area -> .searchArea;",
       "(",
-      `  way(area.searchArea)(${bbox})[\"highway\"~\"^(${highwayPattern})$\"][\"name\"];`,
-      `  nwr(area.searchArea)(${bbox})[\"amenity\"~\"^(${amenityPattern})$\"][\"name\"];`,
-      `  nwr(area.searchArea)(${bbox})[\"shop\"=\"supermarket\"][\"name\"];`,
+      `  way(area.searchArea)(${bbox})["highway"~"^(${highwayPattern})$"]["name"];`,
+      `  nwr(area.searchArea)(${bbox})["amenity"~"^(${amenityPattern})$"]["name"];`,
+      `  nwr(area.searchArea)(${bbox})["shop"="supermarket"]["name"];`,
       ");",
       "out tags geom;"
+    ].join("\n");
+  }
+
+  function buildAreaDiscoveryQuery(relationId, queryTimeoutSeconds = OVERPASS_QUERY_TIMEOUT_SECONDS) {
+    const id = validOsmId(relationId);
+    if (id === null) throw new TypeError("A valid municipality relation ID is required.");
+    const timeout = Math.max(1, Math.floor(queryTimeoutSeconds));
+    return [
+      `[out:json][timeout:${timeout}];`,
+      `relation(${id})->.boundary;`,
+      ".boundary map_to_area -> .searchArea;",
+      "(",
+      '  relation(area.searchArea)["boundary"="administrative"]["admin_level"~"^(8|9|10|11)$"];',
+      '  relation(area.searchArea)["place"~"^(borough|suburb|quarter)$"];',
+      '  way(area.searchArea)["boundary"="administrative"]["admin_level"~"^(8|9|10|11)$"];',
+      '  way(area.searchArea)["place"~"^(borough|suburb|quarter)$"];',
+      ");",
+      "out body geom;"
     ].join("\n");
   }
 
@@ -706,6 +730,322 @@
     return polygons.length === 1
       ? { type: "Polygon", coordinates: polygons[0] }
       : { type: "MultiPolygon", coordinates: polygons };
+  }
+
+  function calculatePolygonBounds(geometry) {
+    if (!geometry) return null;
+    let south = Infinity;
+    let north = -Infinity;
+    let west = Infinity;
+    let east = -Infinity;
+    function visitRing(ring) {
+      if (!Array.isArray(ring)) return;
+      for (const pt of ring) {
+        if (!Array.isArray(pt) || pt.length < 2) continue;
+        const lon = Number(pt[0]);
+        const lat = Number(pt[1]);
+        if (lat < south) south = lat;
+        if (lat > north) north = lat;
+        if (lon < west) west = lon;
+        if (lon > east) east = lon;
+      }
+    }
+    const ringsList = geometry.type === "Polygon"
+      ? [geometry.coordinates]
+      : geometry.type === "MultiPolygon"
+        ? geometry.coordinates
+        : [];
+    for (const rings of ringsList) {
+      if (Array.isArray(rings)) {
+        for (const ring of rings) {
+          visitRing(ring);
+        }
+      }
+    }
+    if (!Number.isFinite(south) || !Number.isFinite(north) || !Number.isFinite(west) || !Number.isFinite(east)) {
+      return null;
+    }
+    return {
+      south: Number(south.toFixed(7)),
+      west: Number(west.toFixed(7)),
+      north: Number(north.toFixed(7)),
+      east: Number(east.toFixed(7))
+    };
+  }
+
+  function pointInPolygonGeometry(point, geometry) {
+    if (!geometry || !geometry.coordinates || !Array.isArray(point)) return false;
+    const ringsList = geometry.type === "Polygon"
+      ? [geometry.coordinates]
+      : geometry.type === "MultiPolygon"
+        ? geometry.coordinates
+        : [];
+    for (const polygonRings of ringsList) {
+      if (!Array.isArray(polygonRings) || polygonRings.length === 0) continue;
+      const outerRing = polygonRings[0];
+      if (pointInRing(point, outerRing)) {
+        let inHole = false;
+        for (let i = 1; i < polygonRings.length; i += 1) {
+          if (pointInRing(point, polygonRings[i])) {
+            inHole = true;
+            break;
+          }
+        }
+        if (!inHole) return true;
+      }
+    }
+    return false;
+  }
+
+  function parseWayPolygon(element) {
+    if (!element || element.type !== "way" || !Array.isArray(element.geometry)) return null;
+    const coords = [];
+    for (const rawPoint of element.geometry) {
+      const coord = toGeoJsonCoordinate(rawPoint);
+      if (coord && (!coords.length || !coordinatesEqual(coords[coords.length - 1], coord))) {
+        coords.push(coord);
+      }
+    }
+    if (coords.length < 3) return null;
+    if (!coordinatesEqual(coords[0], coords[coords.length - 1])) {
+      coords.push([...coords[0]]);
+    }
+    const distinct = new Set(coords.slice(0, -1).map(c => `${c[0]},${c[1]}`));
+    if (coords.length < 4 || distinct.size < 3) return null;
+    return { type: "Polygon", coordinates: [coords] };
+  }
+
+  function boundsArea(b) {
+    if (!b) return 0;
+    return Math.max(0, b.north - b.south) * Math.max(0, b.east - b.west);
+  }
+
+  function boundsIntersectionArea(a, b) {
+    if (!a || !b) return 0;
+    const south = Math.max(a.south, b.south);
+    const north = Math.min(a.north, b.north);
+    const west = Math.max(a.west, b.west);
+    const east = Math.min(a.east, b.east);
+    if (south >= north || west >= east) return 0;
+    return (north - south) * (east - west);
+  }
+
+  function discoverTrainingAreas(firstArg, secondArg, thirdArg, fourthArg) {
+    let elements = [];
+    let municipalityInfo = {};
+    let boundary = null;
+    let options = {};
+
+    if (Array.isArray(firstArg)) {
+      elements = firstArg;
+      municipalityInfo = secondArg || {};
+      boundary = thirdArg || null;
+      options = fourthArg || {};
+    } else if (firstArg && typeof firstArg === "object") {
+      elements = Array.isArray(firstArg.elements) ? firstArg.elements : [];
+      municipalityInfo = firstArg.municipalityInfo || firstArg.municipality || {};
+      boundary = firstArg.boundary || null;
+      options = firstArg.options || {};
+    }
+
+    const cityOsmId = Number(municipalityInfo.osmId);
+    const cityName = trimmedString(municipalityInfo.name);
+    const cityBounds = normalizeMunicipalityBounds(municipalityInfo.bounds);
+    const cityId = municipalityInfo.id || (cityOsmId ? `osm-relation-${cityOsmId}` : "city");
+
+    const candidates = [];
+    const seenIds = new Set();
+
+    for (const el of elements) {
+      if (!el || (el.type !== "relation" && el.type !== "way")) continue;
+      const osmId = validOsmId(el.id);
+      if (osmId === null) continue;
+      if (el.type === "relation" && osmId === cityOsmId) continue;
+      const tags = el.tags && typeof el.tags === "object" ? el.tags : {};
+      const name = trimmedString(tags.name || tags["name:de"]);
+      if (!name) continue;
+
+      const areaId = `osm-${el.type}-${osmId}`;
+      if (seenIds.has(areaId)) continue;
+
+      let polygon = null;
+      if (el.type === "relation") {
+        polygon = buildMunicipalityBoundary([el], osmId);
+      } else if (el.type === "way") {
+        polygon = parseWayPolygon(el);
+      }
+      if (!polygon) continue;
+
+      const bounds = calculatePolygonBounds(polygon);
+      if (!bounds) continue;
+
+      if (cityBounds) {
+        const cArea = boundsArea(cityBounds);
+        const aArea = boundsArea(bounds);
+        if (cArea > 0 && aArea >= cArea * 0.92 && name.toLowerCase() === cityName.toLowerCase()) {
+          continue;
+        }
+        if (boundsIntersectionArea(bounds, cityBounds) === 0) {
+          continue;
+        }
+      }
+
+      const center = {
+        lat: Number(((bounds.south + bounds.north) / 2).toFixed(7)),
+        lon: Number(((bounds.west + bounds.east) / 2).toFixed(7))
+      };
+
+      const adminLevel = tags.admin_level && Number.isInteger(Number(tags.admin_level))
+        ? Number(tags.admin_level)
+        : null;
+      const placeType = tags.place ? String(tags.place).trim() : null;
+      const boundaryType = tags.boundary ? String(tags.boundary).trim() : null;
+
+      seenIds.add(areaId);
+      candidates.push({
+        id: areaId,
+        cityId,
+        name,
+        adminLevel,
+        placeType,
+        boundary: boundaryType,
+        parentId: null,
+        childIds: [],
+        bounds,
+        center,
+        polygon,
+        streetCount: 0,
+        isDefault: false
+      });
+    }
+
+    if (candidates.length === 0) return [];
+
+    const tierMap = new Map();
+    for (const candidate of candidates) {
+      let key = null;
+      if (candidate.adminLevel !== null) {
+        key = `admin:${candidate.adminLevel}`;
+      } else if (candidate.placeType) {
+        key = `place:${candidate.placeType}`;
+      } else {
+        key = "other";
+      }
+      if (!tierMap.has(key)) tierMap.set(key, []);
+      tierMap.get(key).push(candidate);
+    }
+
+    let bestTierKey = null;
+    let bestTierScore = -Infinity;
+
+    for (const [key, tierCandidates] of tierMap.entries()) {
+      const count = tierCandidates.length;
+      if (count === 0) continue;
+
+      let score = 0;
+      if (count === 1) {
+        score -= 200;
+      } else if (count >= 4 && count <= 25) {
+        score += 80;
+      } else if (count >= 2 && count <= 3) {
+        score += 40;
+      } else if (count > 25 && count <= 40) {
+        score += 25;
+      } else if (count > 40) {
+        score -= (count - 40) * 3;
+      }
+
+      if (key === "admin:9") {
+        score += 50;
+      } else if (key === "place:borough") {
+        score += 45;
+      } else if (key === "admin:10") {
+        score += 30;
+      } else if (key === "place:suburb") {
+        score += 25;
+      } else if (key === "admin:8") {
+        score -= 50;
+      }
+
+      if (cityBounds) {
+        const cityArea = boundsArea(cityBounds);
+        if (cityArea > 0) {
+          const totalArea = tierCandidates.reduce((sum, c) => sum + boundsArea(c.bounds), 0);
+          const ratio = totalArea / cityArea;
+          if (ratio >= 0.7 && ratio <= 1.4) {
+            score += 40;
+          } else if (ratio >= 0.4) {
+            score += 20;
+          }
+        }
+      }
+
+      let overlapCount = 0;
+      for (let i = 0; i < tierCandidates.length; i += 1) {
+        for (let j = i + 1; j < tierCandidates.length; j += 1) {
+          const inter = boundsIntersectionArea(tierCandidates[i].bounds, tierCandidates[j].bounds);
+          const minA = Math.min(boundsArea(tierCandidates[i].bounds), boundsArea(tierCandidates[j].bounds));
+          if (minA > 0 && inter / minA > 0.4) {
+            overlapCount += 1;
+          }
+        }
+      }
+      if (overlapCount > 0) {
+        score -= overlapCount * 10;
+      }
+
+      if (score > bestTierScore) {
+        bestTierScore = score;
+        bestTierKey = key;
+      }
+    }
+
+    if (!bestTierKey || bestTierScore <= 0) return [];
+
+    const primaryCandidates = tierMap.get(bestTierKey) || [];
+    if (primaryCandidates.length < 2) return [];
+
+    const resultAreas = [...primaryCandidates];
+    const childCandidates = [];
+
+    for (const [key, tierCandidates] of tierMap.entries()) {
+      if (key === bestTierKey) continue;
+      const isFiner = tierCandidates.every(c => (
+        (c.adminLevel !== null && primaryCandidates[0].adminLevel !== null && c.adminLevel > primaryCandidates[0].adminLevel)
+        || boundsArea(c.bounds) < boundsArea(primaryCandidates[0].bounds)
+      ));
+      if (isFiner && tierCandidates.length <= 120) {
+        childCandidates.push(...tierCandidates);
+      }
+    }
+
+    for (const child of childCandidates) {
+      const childCenterPt = [child.center.lon, child.center.lat];
+      let bestParent = null;
+      let minParentArea = Infinity;
+
+      for (const parent of primaryCandidates) {
+        if (pointInPolygonGeometry(childCenterPt, parent.polygon)) {
+          const pArea = boundsArea(parent.bounds);
+          if (pArea < minParentArea) {
+            minParentArea = pArea;
+            bestParent = parent;
+          }
+        }
+      }
+
+      if (bestParent) {
+        child.parentId = bestParent.id;
+        bestParent.childIds.push(child.id);
+        resultAreas.push(child);
+      }
+    }
+
+    for (const area of resultAreas) {
+      if (area.parentId === area.id) area.parentId = null;
+    }
+
+    return resultAreas.sort((a, b) => compareNames(a.name, b.name));
   }
 
   function processPoiElements(elements, cityId, profiler) {
@@ -1118,6 +1458,7 @@
     const scheduleTimeout = typeof options.setTimeout === "function" ? options.setTimeout : setTimeout;
     const cancelTimeout = typeof options.clearTimeout === "function" ? options.clearTimeout : clearTimeout;
     const geometryApi = options.geometryApi || defaultGeometryApi;
+    const validatorApi = options.validatorApi || defaultValidatorApi;
 
     let queueTail = Promise.resolve();
     let lastRequestStartedAt = null;
@@ -1264,6 +1605,28 @@
       return rawData.elements;
     }
 
+    function formatOverpassErrorDiagnostics(error) {
+      if (!error) return "";
+      const lines = [
+        "OVERPASS REQUEST FAILED",
+        `stage: ${error.stage || "UNKNOWN"}`,
+        `method: ${error.method || "POST"}`,
+        `endpoint: ${error.endpoint || "UNKNOWN"}`,
+        `navigatorOnline: ${error.navigatorOnline !== undefined ? error.navigatorOnline : "unknown"}`,
+        `attempt: ${error.attempt || 1}/${error.maxAttempts || 2}`,
+        `aborted: ${Boolean(error.aborted)}`,
+        "",
+        `error.name: ${error.name || "Error"}`,
+        `error.code: ${error.code || "UNKNOWN"}`,
+        `error.status: ${error.status !== undefined ? error.status : "null"}`,
+        `error.message: ${error.message || ""}`
+      ];
+      if (error.cause) {
+        lines.push(`error.cause: ${error.cause?.message || error.cause}`);
+      }
+      return lines.join("\n");
+    }
+
     async function fetchOverpassElements(query, requestOptions) {
       const { signal, diagnostics, requestKind, onProgress, profiler } = requestOptions;
       const body = new URLSearchParams({ data: query }).toString();
@@ -1274,6 +1637,7 @@
         }
         diagnostics.requests += 1;
         if (requestKind === "chunk") diagnostics.chunkRequests += 1;
+        else if (requestKind === "areas") diagnostics.areaRequests = (diagnostics.areaRequests || 0) + 1;
         else diagnostics.boundaryRequests += 1;
         try {
           const rawData = await fetchJsonWithTimeout(overpassEndpoint, {
@@ -1290,6 +1654,23 @@
           });
           return validateOverpassData(rawData);
         } catch (error) {
+          const isOnline = typeof navigator !== "undefined" && typeof navigator.onLine === "boolean"
+            ? navigator.onLine
+            : true;
+          error.stage = error.stage || (
+            requestKind === "boundary" ? "BOUNDARY"
+            : requestKind === "areas" ? "AREA_DISCOVERY"
+            : (diagnostics.strategy === "chunked" ? "DATA_CHUNK" : "DATA_SINGLE")
+          );
+          error.requestKind = requestKind;
+          error.endpoint = overpassEndpoint;
+          error.method = "POST";
+          error.attempt = attempt + 1;
+          error.maxAttempts = MAX_DOWNLOAD_RETRIES + 1;
+          error.navigatorOnline = isOnline;
+          error.aborted = Boolean(signal && signal.aborted);
+          error.diagnostics = formatOverpassErrorDiagnostics(error);
+
           if (!isRetryableOverpassError(error) || attempt >= MAX_DOWNLOAD_RETRIES) {
             if (isRetryableOverpassError(error)) {
               try { error.retryExhausted = true; } catch (_) {}
@@ -1302,6 +1683,8 @@
             "waiting-for-retry",
             requestKind === "boundary"
               ? "Die Gemeindegrenze wird gleich erneut angefragt …"
+              : requestKind === "areas"
+              ? "Die Trainingsgebiete werden gleich erneut angefragt …"
               : "Ein Stadtbereich wird gleich erneut angefragt …",
             15
           );
@@ -1442,15 +1825,51 @@
       diagnostics.finalStreets = streets.length;
       diagnostics.finalPois = pois.length;
       throwIfAborted(signal, "Overpass");
+      let areas = [];
+      if (downloadOptions.discoverAreas) {
+        emitProgress(onProgress, "discovering-areas", "Administrative Trainingsgebiete werden ermittelt …", 88);
+        try {
+          const areaQuery = buildAreaDiscoveryQuery(municipalityInfo.osmId, overpassQueryTimeoutSeconds);
+          const areaElements = await fetchOverpassElements(areaQuery, {
+            signal,
+            diagnostics,
+            requestKind: "areas",
+            onProgress,
+            profiler
+          });
+          areas = discoverTrainingAreas({
+            elements: areaElements,
+            municipalityInfo,
+            boundary,
+            options: downloadOptions
+          });
+          if (validatorApi && typeof validatorApi.assignAreasToEntities === "function") {
+            const assignment = validatorApi.assignAreasToEntities(areas, streets, pois);
+            areas = Array.isArray(assignment) ? assignment : (assignment?.areas || []);
+          }
+        } catch (error) {
+          if (error?.name === "AbortError") throw error;
+          if (typeof console !== "undefined" && typeof console.warn === "function") {
+            console.warn("Area discovery failed; continuing with whole city:", error);
+          }
+          areas = [];
+        }
+      }
+
+      throwIfAborted(signal, "Overpass");
       emitProgress(onProgress, "finalizing", `${streets.length} Straßen und ${pois.length} Einrichtungen gefunden.`, 95);
 
       const timestamp = new Date(now()).toISOString();
       const city = createCityMetadata(municipality, cityId, streets, pois, timestamp);
+      if (areas.length > 0) {
+        city.hasAreas = true;
+        city.areaCount = areas.length;
+      }
       if (profiler.enabled) {
         downloadOptions.diagnostics.timingsMs.totalFetchCityDataMs = monotonicNow() - totalStartedAt;
         profiler.finish();
       }
-      const result = { city, streets, pois, boundary, downloadDiagnostics: diagnostics };
+      const result = { city, streets, pois, areas, boundary, downloadDiagnostics: diagnostics };
       emitProgress(onProgress, "completed", "Download abgeschlossen.", 100);
       return result;
     }
@@ -1474,7 +1893,12 @@
       return raceWithAbort(queued, signal);
     }
 
-    return { searchMunicipalities, fetchCityData };
+    return {
+      searchMunicipalities,
+      fetchCityData,
+      discoverTrainingAreas,
+      formatOverpassErrorDiagnostics
+    };
   }
 
   const defaultInstance = createOsmService();
@@ -1502,7 +1926,11 @@
     splitDownloadChunk,
     deduplicateOsmElements,
     createOsmService,
+    buildAreaDiscoveryQuery,
+    discoverTrainingAreas,
+    formatOverpassErrorDiagnostics: defaultInstance.formatOverpassErrorDiagnostics,
     searchMunicipalities: defaultInstance.searchMunicipalities,
-    fetchCityData: defaultInstance.fetchCityData
+    fetchCityData: defaultInstance.fetchCityData,
+    discoverTrainingAreas: defaultInstance.discoverTrainingAreas
   };
 });

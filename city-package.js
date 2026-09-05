@@ -48,8 +48,9 @@
     return normalized || "stadt";
   }
 
-  function cityPackageFilename(city) {
-    return `${slugifyCityName(displayName(city))}-strassentrainer-v${SCHEMA_VERSION}.json`;
+  function cityPackageFilename(city, schemaVersion = SCHEMA_VERSION) {
+    const version = Number.isInteger(schemaVersion) ? schemaVersion : SCHEMA_VERSION;
+    return `${slugifyCityName(displayName(city))}-strassentrainer-v${version}.json`;
   }
 
   function isoTimestamp(value) {
@@ -62,7 +63,7 @@
 
   function validationIssues(result, kind = "errors") {
     if (!result?.validation) return [];
-    return ["municipality", "streets", "pois"].flatMap(sectionName => {
+    return ["municipality", "streets", "pois", "areas"].flatMap(sectionName => {
       const issues = result.validation[sectionName]?.[kind];
       return Array.isArray(issues) ? issues : [];
     });
@@ -77,8 +78,11 @@
       return "Die Stadtdatei enthält unsichere Daten und wurde blockiert.";
     }
     if (codes.has("STREET_ID_DUPLICATE") || codes.has("POI_ID_DUPLICATE")
-      || codes.has("CITY_ENTITY_ID_DUPLICATE")) {
+      || codes.has("AREA_ID_DUPLICATE") || codes.has("CITY_ENTITY_ID_DUPLICATE")) {
       return "Die Stadtdatei enthält doppelte IDs.";
+    }
+    if (codes.has("AREA_PARENT_CYCLE")) {
+      return "Die Hierarchie der Trainingsgebiete enthält einen unzulässigen Zyklus.";
     }
     if (codes.has("STREET_GEOMETRY_INVALID") || codes.has("STREET_GEOMETRY_MISSING")) {
       return "Die Stadtdatei enthält ungültige Straßengeometrien.";
@@ -86,31 +90,50 @@
     if (codes.has("POI_GEOMETRY_INVALID") || codes.has("POI_POSITION_INVALID")) {
       return "Die Stadtdatei enthält ungültige POI-Koordinaten oder -Geometrien.";
     }
-    if (codes.has("CITY_BOUNDS_INVALID") || codes.has("CITY_CENTER_INVALID")) {
+    if (codes.has("CITY_BOUNDS_INVALID") || codes.has("CITY_CENTER_INVALID")
+      || codes.has("AREA_BOUNDS_INVALID") || codes.has("AREA_CENTER_INVALID")) {
       return "Die Stadtdatei enthält ungültige Kartengrenzen oder Koordinaten.";
     }
     return "Die Stadtdatei verwendet ein nicht unterstütztes Format oder enthält ungültige Daten.";
   }
 
-  function createCityPackage(city, streets, pois, options = {}) {
+  function createCityPackage(city, streets, pois, areasOrOptions = [], options = {}) {
+    let areas = [];
+    let packageOptions = options;
+    if (Array.isArray(areasOrOptions)) {
+      areas = areasOrOptions;
+      packageOptions = options || {};
+    } else if (areasOrOptions && typeof areasOrOptions === "object") {
+      areas = [];
+      packageOptions = areasOrOptions;
+    }
+
+    const hasAreas = Array.isArray(areas) && areas.length > 0;
     const candidate = {
       schemaVersion: SCHEMA_VERSION,
-      exportedAt: isoTimestamp(options.exportedAt),
+      exportedAt: isoTimestamp(packageOptions.exportedAt),
       city,
       streets,
       pois
     };
+    if (hasAreas) {
+      candidate.areas = areas;
+    }
     const validated = requireValidator().validateCityPackage(candidate);
     if (!validated.valid) {
       throw new CityPackageError("EXPORT_DATA_INVALID", validationErrorMessage(validated));
     }
-    return {
+    const result = {
       schemaVersion: SCHEMA_VERSION,
       exportedAt: candidate.exportedAt,
       city: validated.city,
       streets: validated.streets,
       pois: validated.pois
     };
+    if (hasAreas) {
+      result.areas = validated.areas || [];
+    }
+    return result;
   }
 
   async function exportCityPackage(cityId, options = {}) {
@@ -124,18 +147,28 @@
       throw new CityPackageError("STORAGE_UNAVAILABLE", "Der lokale Stadtspeicher ist nicht verfügbar.");
     }
 
-    const [city, streets, pois] = await Promise.all([
+    const queries = [
       storage.getCity(normalizedCityId),
       storage.getCityStreets(normalizedCityId),
       storage.getCityPois(normalizedCityId)
-    ]);
+    ];
+    const hasGetCityAreas = typeof storage.getCityAreas === "function";
+    if (hasGetCityAreas) {
+      queries.push(storage.getCityAreas(normalizedCityId));
+    }
+    const results = await Promise.all(queries);
+    const city = results[0];
+    const streets = results[1];
+    const pois = results[2];
+    const areas = hasGetCityAreas ? results[3] : [];
+
     if (!city) {
       throw new CityPackageError("CITY_NOT_FOUND", "Die ausgewählte Stadt wurde lokal nicht gefunden.");
     }
-    const packageData = createCityPackage(city, streets, pois, { exportedAt: options.exportedAt });
+    const packageData = createCityPackage(city, streets, pois, areas, { exportedAt: options.exportedAt });
     return {
       packageData,
-      filename: cityPackageFilename(city),
+      filename: cityPackageFilename(city, packageData.schemaVersion),
       json: `${JSON.stringify(packageData, null, 2)}\n`
     };
   }

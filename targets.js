@@ -43,7 +43,8 @@
         geometry,
         active: rawStreet.active !== false,
         quizEligible: rawStreet.quizEligible !== false,
-        needsReview: Boolean(rawStreet.needsReview)
+        needsReview: Boolean(rawStreet.needsReview),
+        areaIds: Array.isArray(rawStreet.areaIds) ? [...rawStreet.areaIds] : []
       };
     });
   }
@@ -81,7 +82,8 @@
         geometrySourceUrl: rawPoi.geometrySourceUrl || null,
         geometryCheckedAt: rawPoi.geometryCheckedAt || null,
         needsReview: Boolean(rawPoi.needsReview),
-        reviewNote: rawPoi.reviewNote || null
+        reviewNote: rawPoi.reviewNote || null,
+        areaIds: Array.isArray(rawPoi.areaIds) ? [...rawPoi.areaIds] : []
       };
     });
   }

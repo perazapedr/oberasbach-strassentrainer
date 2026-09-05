@@ -7,6 +7,7 @@ const {
   STORE_CITIES,
   STORE_STREETS,
   STORE_POIS,
+  STORE_AREAS,
   INDEX_CITY_ID,
   ACTIVE_CITY_STORAGE_KEY,
   createCityStorage
@@ -411,7 +412,7 @@ function createTestHarness(options = {}) {
   const storage = options.storage || createMemoryStorage();
   const cityStorage = createCityStorage({
     dbName: "test-strassentrainer-db",
-    dbVersion: 1,
+    dbVersion: options.dbVersion !== undefined ? options.dbVersion : DB_VERSION,
     indexedDB: idb,
     localStorage: storage,
     IDBKeyRange: MockIDBKeyRange,
@@ -529,10 +530,11 @@ const poisB = [
 (async () => {
   // Konstanten prüfen
   assert.equal(DB_NAME, "strassentrainer-db");
-  assert.equal(DB_VERSION, 1);
+  assert.equal(DB_VERSION, 2);
   assert.equal(STORE_CITIES, "cities");
   assert.equal(STORE_STREETS, "streets");
   assert.equal(STORE_POIS, "pois");
+  assert.equal(STORE_AREAS, "areas");
   assert.equal(INDEX_CITY_ID, "cityId");
   assert.equal(ACTIVE_CITY_STORAGE_KEY, "strassentrainer-active-city-v1");
 
@@ -715,7 +717,8 @@ const poisB = [
       if (Array.isArray(storeNames)
         && storeNames.includes(STORE_CITIES)
         && storeNames.includes(STORE_STREETS)
-        && storeNames.includes(STORE_POIS)) {
+        && storeNames.includes(STORE_POIS)
+        && storeNames.includes(STORE_AREAS)) {
         readTransactions.push({ storeNames: [...storeNames], mode });
       }
       return originalTransaction(storeNames, mode);
@@ -731,9 +734,9 @@ const poisB = [
     assert.ok(dataA.streets.every(street => street.cityId === cityA.id));
     assert.ok(dataA.pois.every(poi => poi.cityId === cityA.id));
     assert.deepEqual(readTransactions, [{
-      storeNames: [STORE_CITIES, STORE_STREETS, STORE_POIS],
+      storeNames: [STORE_CITIES, STORE_STREETS, STORE_POIS, STORE_AREAS],
       mode: "readonly"
-    }], "Metadaten, Straßen und POIs müssen aus genau einer gemeinsamen Readonly-Transaktion stammen");
+    }], "Metadaten, Straßen, POIs und Gebiete müssen aus genau einer gemeinsamen Readonly-Transaktion stammen");
   }
 
   // Test 11b – getCityData() liefert für unbekannte oder ungültige IDs null
@@ -1084,6 +1087,88 @@ const poisB = [
     cityStorage.closeDatabase();
     const db3 = await cityStorage.openDatabase();
     assert.ok(db3);
+  }
+
+  // Test 31 – Speichern und Laden von Trainingsgebieten (areas)
+  {
+    const { cityStorage } = createTestHarness();
+    const areasA = [
+      {
+        id: "osm-relation-123456:area:1",
+        cityId: cityA.id,
+        name: "Gebiet Nord",
+        displayName: "Gebiet Nord",
+        adminLevel: 9
+      },
+      {
+        id: "osm-relation-123456:area:2",
+        cityId: cityA.id,
+        name: "Gebiet Süd",
+        displayName: "Gebiet Süd",
+        adminLevel: 9
+      }
+    ];
+    await cityStorage.saveCity(cityA, streetsA, poisA, areasA);
+    const loadedAreas = await cityStorage.getCityAreas(cityA.id);
+    assert.equal(loadedAreas.length, 2);
+    assert.equal(loadedAreas[0].name, "Gebiet Nord");
+    assert.equal(loadedAreas[1].name, "Gebiet Süd");
+
+    const bundle = await cityStorage.getCityData(cityA.id);
+    assert.ok(bundle);
+    assert.equal(bundle.areas.length, 2);
+    assert.deepEqual(bundle.areas.map(a => a.id).sort(), areasA.map(a => a.id).sort());
+  }
+
+  // Test 32 – Löschen einer Stadt entfernt auch deren Gebiete
+  {
+    const { cityStorage } = createTestHarness();
+    const areasA = [
+      {
+        id: "osm-relation-123456:area:1",
+        cityId: cityA.id,
+        name: "Gebiet Nord",
+        displayName: "Gebiet Nord"
+      }
+    ];
+    await cityStorage.saveCity(cityA, streetsA, poisA, areasA);
+    assert.equal((await cityStorage.getCityAreas(cityA.id)).length, 1);
+    await cityStorage.deleteCity(cityA.id);
+    assert.equal((await cityStorage.getCityAreas(cityA.id)).length, 0);
+  }
+
+  // Test 33 – DB-Upgrade von Version 1 auf 2 erhält bestehende Daten
+  {
+    const idb = new MockIDBFactory();
+    const storage = createMemoryStorage();
+    // Öffne DB zuerst mit Version 1
+    const v1Storage = createCityStorage({
+      dbName: "test-migration-db",
+      dbVersion: 1,
+      indexedDB: idb,
+      localStorage: storage,
+      IDBKeyRange: MockIDBKeyRange
+    });
+    await v1Storage.saveCity(cityA, streetsA, poisA);
+    v1Storage.closeDatabase();
+
+    // Öffne nun mit Version 2
+    const v2Storage = createCityStorage({
+      dbName: "test-migration-db",
+      dbVersion: 2,
+      indexedDB: idb,
+      localStorage: storage,
+      IDBKeyRange: MockIDBKeyRange
+    });
+    const loadedCity = await v2Storage.getCity(cityA.id);
+    assert.ok(loadedCity);
+    assert.equal(loadedCity.id, cityA.id);
+    const loadedStreets = await v2Storage.getCityStreets(cityA.id);
+    assert.equal(loadedStreets.length, streetsA.length);
+    const loadedPois = await v2Storage.getCityPois(cityA.id);
+    assert.equal(loadedPois.length, poisA.length);
+    const areas = await v2Storage.getCityAreas(cityA.id);
+    assert.deepEqual(areas, []);
   }
 
   console.log("City-Storage-Tests erfolgreich:");

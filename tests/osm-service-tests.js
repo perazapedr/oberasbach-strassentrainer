@@ -1087,6 +1087,69 @@ test("Overpass-Rohobjekte werden bei der Verarbeitung nicht mutiert", async () =
   assert.deepEqual(elements, snapshot);
 });
 
+test("Overpass-Fehler enthält diagnostische Details (stage, endpoint, method, attempt)", async () => {
+  const { service } = createCityService([], {
+    fetch: async () => { throw new TypeError("Failed to fetch"); },
+    overpassRetryDelayMs: 5
+  });
+  await assert.rejects(service.fetchCityData(municipality()), error => {
+    assert.equal(error.stage, "BOUNDARY");
+    assert.equal(error.method, "POST");
+    assert.equal(error.attempt, 2);
+    assert.equal(error.maxAttempts, 2);
+    assert.ok(typeof error.diagnostics === "string");
+    assert.match(error.diagnostics, /OVERPASS REQUEST FAILED/);
+    assert.match(error.diagnostics, /stage: BOUNDARY/);
+    assert.match(error.diagnostics, /method: POST/);
+    return true;
+  });
+});
+
+test("Overpass-Retry führt bei vorübergehendem Fehler zweiten Versuch durch und gelingt", async () => {
+  let callCount = 0;
+  const { service } = createCityService([streetWay(1)], {
+    overpassRetryDelayMs: 5,
+    fetch: async () => {
+      callCount += 1;
+      if (callCount === 1) throw new TypeError("Temporary network hiccup");
+      return responseWith({ elements: [streetWay(1)] });
+    }
+  });
+  const result = await service.fetchCityData(municipality());
+  assert.equal(callCount, 3);
+  assert.equal(result.downloadDiagnostics.retries, 1);
+  assert.equal(result.streets.length, 1);
+});
+
+test("Area-Discovery-Fehler bricht den Stadtdownload nicht ab und fällt auf areas = [] zurück", async () => {
+  const { service } = createCityService([streetWay(1)], {
+    fetch: async (url, options) => {
+      const body = String(options?.body || "");
+      if (body.includes("administrative") || body.includes("borough")) {
+        throw new TypeError("Area discovery network error");
+      }
+      return responseWith({ elements: [streetWay(1)] });
+    }
+  });
+  const result = await service.fetchCityData(municipality(), { discoverAreas: true });
+  assert.equal(result.streets.length, 1);
+  assert.deepEqual(result.areas, []);
+});
+
+test("Boundary-Fehler bricht den Stadtdownload sauber ab", async () => {
+  const { service } = createCityService([], {
+    fetch: async () => {
+      throw new TypeError("Boundary fetch failed");
+    },
+    overpassRetryDelayMs: 5
+  });
+  await assert.rejects(service.fetchCityData(municipality()), error => {
+    assert.equal(error.stage, "BOUNDARY");
+    assert.equal(error.code, "NETWORK_ERROR");
+    return true;
+  });
+});
+
 (async () => {
   let passed = 0;
   for (const currentTest of tests) {
