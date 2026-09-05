@@ -1,5 +1,21 @@
 {
   "schemaVersion": 1,
+  "package": {
+    "id": "de-oberasbach-fire-training",
+    "type": "curated",
+    "version": "1.0.0",
+    "title": "Oberasbach – geprüftes Trainingspaket",
+    "createdAt": "2026-08-28T00:00:00.000Z",
+    "updatedAt": "2026-09-05T00:00:00.000Z",
+    "source": "curated",
+    "verification": {
+      "status": "verified",
+      "verifiedAt": "2026-09-05T00:00:00.000Z",
+      "maintainer": "Straßentrainer",
+      "note": "Straßen und relevante Einrichtungen redaktionell geprüft"
+    },
+    "contentHash": "sha256:1a0854340fa6519d7a3947b0726767e45aca323dfeaadaefff999801bb921b95"
+  },
   "city": {
     "id": "osm-relation-1016396",
     "name": "Oberasbach",
@@ -28,7 +44,23 @@
     "source": "curated+openstreetmap",
     "dataVersion": 1,
     "createdAt": "2026-08-28T00:00:00.000Z",
-    "updatedAt": "2026-08-28T00:00:00.000Z"
+    "updatedAt": "2026-08-28T00:00:00.000Z",
+    "package": {
+      "id": "de-oberasbach-fire-training",
+      "type": "curated",
+      "version": "1.0.0",
+      "title": "Oberasbach – geprüftes Trainingspaket",
+      "createdAt": "2026-08-28T00:00:00.000Z",
+      "updatedAt": "2026-09-05T00:00:00.000Z",
+      "source": "curated",
+      "verification": {
+        "status": "verified",
+        "verifiedAt": "2026-09-05T00:00:00.000Z",
+        "maintainer": "Straßentrainer",
+        "note": "Straßen und relevante Einrichtungen redaktionell geprüft"
+      },
+      "contentHash": "sha256:1a0854340fa6519d7a3947b0726767e45aca323dfeaadaefff999801bb921b95"
+    }
   },
   "streets": [
     {

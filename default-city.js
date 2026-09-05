@@ -93,7 +93,10 @@
         ? await storage.hasCity(DEFAULT_CITY_ID)
         : false;
       if (!alreadyInstalled) {
-        await storage.saveCity(cityPackage.city, cityPackage.streets, cityPackage.pois);
+        const cityToSave = cityPackage.boundary && !cityPackage.city.boundary
+          ? { ...cityPackage.city, boundary: cityPackage.boundary }
+          : cityPackage.city;
+        await storage.saveCity(cityToSave, cityPackage.streets, cityPackage.pois);
       }
       await storage.setActiveCityId(DEFAULT_CITY_ID);
       return {

@@ -119,7 +119,21 @@ test("Browser-Global und öffentliche API sind verfügbar", () => {
 });
 
 test("zentrale Kategorien und Schwellenwerte sind dokumentiert exportiert", () => {
-  assert.deepEqual(SUPPORTED_POI_CATEGORIES, ["fire_station", "school", "kindergarten", "supermarket"]);
+  assert.deepEqual(SUPPORTED_POI_CATEGORIES, [
+    "fire_station",
+    "police",
+    "hospital",
+    "nursing_care",
+    "school",
+    "kindergarten",
+    "public_building",
+    "supermarket",
+    "fuel",
+    "hotel",
+    "restaurant",
+    "sports_facility",
+    "company"
+  ]);
   assert.equal(MIN_PLAYABLE_STREETS, 5);
   assert.equal(STREET_MERGE_DISTANCE_METERS, 8);
   assert.equal(POI_POSSIBLE_DUPLICATE_DISTANCE_METERS, 50);
@@ -438,7 +452,7 @@ test("unsicheres nahes POI-Duplikat bleibt getrennt und wird gewarnt", () => {
 });
 
 test("unbekannte POI-Kategorie wird nicht umetikettiert", () => {
-  const unknown = poi("unknown", "Krankenhaus", undefined, { category: "hospital" });
+  const unknown = poi("unknown", "Unbekannter Ort", undefined, { category: "unknown_category_xyz" });
   const result = validateCityData(packageFixture({ pois: [poi(), unknown] }));
   assert.equal(result.pois.length, 1);
   assert.ok(allCodes(result).includes("POI_CATEGORY_INVALID"));

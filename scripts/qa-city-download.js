@@ -120,7 +120,10 @@ async function main() {
   const options = parseArguments(process.argv.slice(2));
   const requests = [];
   const progress = [];
-  const service = osmApi.createOsmService({ fetch: createMeasuredFetch(requests) });
+  const service = osmApi.createOsmService({
+    fetch: createMeasuredFetch(requests),
+    overpassEndpoint: process.env.OVERPASS_API_URL || undefined
+  });
 
   const totalStartedAt = performance.now();
   const searchStartedAt = performance.now();

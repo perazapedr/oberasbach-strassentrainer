@@ -3,18 +3,41 @@
   const commonJsGeometry = typeof module === "object" && module.exports && typeof require === "function"
     ? require("./geometry.js")
     : null;
-  const api = factory((root && root.StreetGeometry) || commonJsGeometry);
+  const commonJsPoiCategories = typeof module === "object" && module.exports && typeof require === "function"
+    ? require("./poi-categories.js")
+    : null;
+  const api = factory(
+    (root && root.StreetGeometry) || commonJsGeometry,
+    (root && root.StrassentrainerPoiCategories) || commonJsPoiCategories
+  );
   if (typeof module === "object" && module.exports) module.exports = api;
   if (root) root.StrassentrainerCityDataValidator = api;
-})(typeof globalThis !== "undefined" ? globalThis : this, function createCityDataValidatorApi(geometryApi) {
+})(typeof globalThis !== "undefined" ? globalThis : this, function createCityDataValidatorApi(geometryApi, defaultPoiCategoriesApi) {
   "use strict";
 
-  const SUPPORTED_POI_CATEGORIES = Object.freeze([
-    "fire_station",
-    "school",
-    "kindergarten",
-    "supermarket"
-  ]);
+  const poiCategoriesApi = defaultPoiCategoriesApi
+    || (typeof globalThis !== "undefined" && globalThis.StrassentrainerPoiCategories)
+    || null;
+
+  const SUPPORTED_POI_CATEGORIES = Object.freeze(
+    poiCategoriesApi && typeof poiCategoriesApi.getAllCategoryIds === "function"
+      ? poiCategoriesApi.getAllCategoryIds()
+      : [
+        "fire_station",
+        "school",
+        "kindergarten",
+        "supermarket",
+        "police",
+        "hospital",
+        "nursing_care",
+        "fuel",
+        "company",
+        "hotel",
+        "restaurant",
+        "sports_facility",
+        "public_building"
+      ]
+  );
   const SUPPORTED_STREET_HIGHWAY_TYPES = Object.freeze([
     "residential",
     "living_street",
@@ -667,7 +690,24 @@
     const streets = createSection(Array.isArray(cityPackage?.streets) ? cityPackage.streets.length : 0);
     const pois = createSection(Array.isArray(cityPackage?.pois) ? cityPackage.pois.length : 0);
     const areas = createSection(Array.isArray(cityPackage?.areas) ? cityPackage.areas.length : 0);
-    return { municipality, streets, pois, areas };
+    const packageSection = { valid: true, warnings: [], errors: [] };
+    return { package: packageSection, municipality, streets, pois, areas };
+  }
+
+  function addPackageIssue(validation, code, targetId, message, details, severity = "error") {
+    const iss = issue(code, severity, "package", targetId, message, details);
+    if (!validation.package) {
+      validation.package = { valid: true, warnings: [], errors: [] };
+    }
+    if (severity === "error") {
+      validation.package.errors.push(iss);
+      validation.package.valid = false;
+      validation.municipality.errors.push(iss);
+      validation.municipality.valid = false;
+    } else {
+      validation.package.warnings.push(iss);
+      validation.municipality.warnings.push(iss);
+    }
   }
 
   function addMunicipalityError(validation, code, cityId, message, details) {
@@ -898,6 +938,253 @@
     return validAreas;
   }
 
+  function sha256Hex(asciiOrUtf8) {
+    if (typeof process === "object" && process?.versions?.node) {
+      try {
+        const crypto = require("node:crypto");
+        if (crypto && typeof crypto.createHash === "function") {
+          return crypto.createHash("sha256").update(asciiOrUtf8, "utf8").digest("hex");
+        }
+      } catch (_) {}
+    }
+
+    function rightRotate(value, amount) {
+      return (value >>> amount) | (value << (32 - amount));
+    }
+    const mathPow = Math.pow;
+    const maxWord = mathPow(2, 32);
+    let i;
+    let result = "";
+
+    let hash = [];
+    let k = [];
+    let primeCounter = 0;
+
+    const isComposite = {};
+    for (let candidate = 2; primeCounter < 64; candidate++) {
+      if (!isComposite[candidate]) {
+        for (i = 0; i < 313; i += candidate) {
+          isComposite[i] = candidate;
+        }
+        hash[primeCounter] = (mathPow(candidate, 0.5) * maxWord) | 0;
+        k[primeCounter++] = (mathPow(candidate, 1 / 3) * maxWord) | 0;
+      }
+    }
+    hash = hash.slice(0, 8);
+
+    let utf8Bytes;
+    if (typeof TextEncoder !== "undefined") {
+      utf8Bytes = new TextEncoder().encode(asciiOrUtf8);
+    } else {
+      const bytes = [];
+      const str = String(asciiOrUtf8);
+      for (let ci = 0; ci < str.length; ci++) {
+        let code = str.charCodeAt(ci);
+        if (code < 0x80) bytes.push(code);
+        else if (code < 0x800) bytes.push(0xc0 | (code >> 6), 0x80 | (code & 0x3f));
+        else if (code < 0xd800 || code >= 0xe000) bytes.push(0xe0 | (code >> 12), 0x80 | ((code >> 6) & 0x3f), 0x80 | (code & 0x3f));
+        else {
+          ci++;
+          code = 0x10000 + (((code & 0x3ff) << 10) | (str.charCodeAt(ci) & 0x3ff));
+          bytes.push(0xf0 | (code >> 18), 0x80 | ((code >> 12) & 0x3f), 0x80 | ((code >> 6) & 0x3f), 0x80 | (code & 0x3f));
+        }
+      }
+      utf8Bytes = new Uint8Array(bytes);
+    }
+
+    const utf8Length = utf8Bytes.length;
+    const bitLength = utf8Length * 8;
+    const wordCount = (((utf8Length + 8) >> 6) + 1) * 16;
+    const w = new Uint32Array(wordCount);
+    for (i = 0; i < utf8Length; i++) {
+      w[i >> 2] |= utf8Bytes[i] << (24 - (i % 4) * 8);
+    }
+    w[utf8Length >> 2] |= 0x80 << (24 - (utf8Length % 4) * 8);
+    w[wordCount - 1] = bitLength & 0xffffffff;
+    w[wordCount - 2] = Math.floor(bitLength / 0x100000000);
+
+    for (let j = 0; j < wordCount; j += 16) {
+      const W = new Uint32Array(64);
+      for (i = 0; i < 16; i++) W[i] = w[j + i];
+      for (i = 16; i < 64; i++) {
+        const s0 = rightRotate(W[i - 15], 7) ^ rightRotate(W[i - 15], 18) ^ (W[i - 15] >>> 3);
+        const s1 = rightRotate(W[i - 2], 17) ^ rightRotate(W[i - 2], 19) ^ (W[i - 2] >>> 10);
+        W[i] = (W[i - 16] + s0 + W[i - 7] + s1) | 0;
+      }
+
+      let [a, b, c, d, e, f, g, h] = hash;
+
+      for (i = 0; i < 64; i++) {
+        const S1 = rightRotate(e, 6) ^ rightRotate(e, 11) ^ rightRotate(e, 25);
+        const ch = (e & f) ^ ((~e) & g);
+        const temp1 = (h + S1 + ch + k[i] + W[i]) | 0;
+        const S0 = rightRotate(a, 2) ^ rightRotate(a, 13) ^ rightRotate(a, 22);
+        const maj = (a & b) ^ (a & c) ^ (b & c);
+        const temp2 = (S0 + maj) | 0;
+
+        h = g;
+        g = f;
+        f = e;
+        e = (d + temp1) | 0;
+        d = c;
+        c = b;
+        b = a;
+        a = (temp1 + temp2) | 0;
+      }
+
+      hash[0] = (hash[0] + a) | 0;
+      hash[1] = (hash[1] + b) | 0;
+      hash[2] = (hash[2] + c) | 0;
+      hash[3] = (hash[3] + d) | 0;
+      hash[4] = (hash[4] + e) | 0;
+      hash[5] = (hash[5] + f) | 0;
+      hash[6] = (hash[6] + g) | 0;
+      hash[7] = (hash[7] + h) | 0;
+    }
+
+    for (i = 0; i < 8; i++) {
+      result += ("00000000" + (hash[i] >>> 0).toString(16)).slice(-8);
+    }
+    return result;
+  }
+
+  function canonicalJsonStringify(value) {
+    if (value === null || typeof value !== "object") {
+      return JSON.stringify(value);
+    }
+    if (Array.isArray(value)) {
+      return "[" + value.map(canonicalJsonStringify).join(",") + "]";
+    }
+    const keys = Object.keys(value).sort();
+    return "{" + keys.map(key => JSON.stringify(key) + ":" + canonicalJsonStringify(value[key])).join(",") + "}";
+  }
+
+  function parseSemver(str) {
+    const match = String(str || "").trim().match(/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/);
+    if (!match) return null;
+    return [Number(match[1]), Number(match[2]), Number(match[3])];
+  }
+
+  function comparePackageVersions(a, b) {
+    const parsedA = parseSemver(a);
+    const parsedB = parseSemver(b);
+    if (!parsedA || !parsedB) {
+      throw new Error(`Ungültige Paketversion für Versionsvergleich: "${a}" bzw. "${b}".`);
+    }
+    for (let i = 0; i < 3; i++) {
+      if (parsedA[i] !== parsedB[i]) {
+        return parsedA[i] > parsedB[i] ? 1 : -1;
+      }
+    }
+    return 0;
+  }
+
+  function buildCanonicalPackageData(data) {
+    const pkg = data?.package || {};
+    const city = data?.city || {};
+    const streets = Array.isArray(data?.streets) ? data.streets : [];
+    const pois = Array.isArray(data?.pois) ? data.pois : [];
+    const areas = Array.isArray(data?.areas) ? data.areas : [];
+
+    return {
+      package: {
+        id: String(pkg.id || "").trim(),
+        type: String(pkg.type || "").trim(),
+        version: String(pkg.version || "").trim()
+      },
+      city: {
+        id: String(city.id || "").trim(),
+        name: String(city.name || "").trim(),
+        displayName: String(city.displayName || city.name || "").trim(),
+        osmType: String(city.osmType || "").trim(),
+        osmId: Number(city.osmId) || 0,
+        bounds: city.bounds ? {
+          south: Number(city.bounds.south),
+          west: Number(city.bounds.west),
+          north: Number(city.bounds.north),
+          east: Number(city.bounds.east)
+        } : null,
+        center: city.center ? {
+          lat: Number(city.center.lat),
+          lon: Number(city.center.lon)
+        } : null
+      },
+      streets: streets.map(street => ({
+        id: String(street.id || "").trim(),
+        cityId: String(street.cityId || "").trim(),
+        name: String(street.name || "").trim(),
+        aliases: Array.isArray(street.aliases)
+          ? [...new Set(street.aliases.map(a => String(a || "").trim()).filter(Boolean))].sort()
+          : [],
+        osmWayIds: Array.isArray(street.osmWayIds)
+          ? [...new Set(street.osmWayIds.map(Number).filter(Number.isFinite))].sort((a, b) => a - b)
+          : [],
+        geometry: street.geometry ? {
+          type: street.geometry.type,
+          coordinates: street.geometry.coordinates
+        } : null
+      })).sort((a, b) => a.id.localeCompare(b.id, "de", { numeric: true })),
+      pois: pois.map(poi => ({
+        id: String(poi.id || "").trim(),
+        cityId: String(poi.cityId || "").trim(),
+        name: String(poi.name || "").trim(),
+        category: String(poi.category || "").trim(),
+        position: poi.position ? {
+          lat: Number(poi.position.lat),
+          lon: Number(poi.position.lon)
+        } : null,
+        geometry: poi.geometry ? {
+          type: poi.geometry.type,
+          coordinates: poi.geometry.coordinates
+        } : null
+      })).sort((a, b) => a.id.localeCompare(b.id, "de", { numeric: true })),
+      areas: areas.map(area => ({
+        id: String(area.id || "").trim(),
+        cityId: String(area.cityId || "").trim(),
+        name: String(area.name || "").trim(),
+        parentId: area.parentId ? String(area.parentId).trim() : null,
+        tier: area.tier !== undefined ? Number(area.tier) : null,
+        adminLevel: area.adminLevel !== undefined ? Number(area.adminLevel) : null,
+        bounds: area.bounds ? {
+          south: Number(area.bounds.south),
+          west: Number(area.bounds.west),
+          north: Number(area.bounds.north),
+          east: Number(area.bounds.east)
+        } : null,
+        geometry: area.geometry ? {
+          type: area.geometry.type,
+          coordinates: area.geometry.coordinates
+        } : (area.boundary ? {
+          type: area.boundary.type,
+          coordinates: area.boundary.coordinates
+        } : null)
+      })).sort((a, b) => a.id.localeCompare(b.id, "de", { numeric: true }))
+    };
+  }
+
+  function computePackageHash(data) {
+    const canonical = buildCanonicalPackageData(data);
+    const json = canonicalJsonStringify(canonical);
+    const hex = sha256Hex(json);
+    return "sha256:" + hex;
+  }
+
+  function verifyPackageHash(data) {
+    const rawHash = data?.package?.contentHash;
+    if (!rawHash) {
+      return { status: "no_hash", valid: true, expectedHash: null, actualHash: null };
+    }
+    const expectedHash = computePackageHash(data);
+    const normalize = h => String(h || "").trim().toLowerCase().replace(/^sha256:/, "");
+    const valid = normalize(rawHash) === normalize(expectedHash);
+    return {
+      status: valid ? "verified" : "mismatch",
+      valid,
+      expectedHash,
+      actualHash: rawHash
+    };
+  }
+
   function validateCityPackage(cityPackage) {
     const inputIsObject = Boolean(cityPackage && typeof cityPackage === "object" && !Array.isArray(cityPackage));
     const validation = importedPackageValidationResult(inputIsObject ? cityPackage : null);
@@ -932,6 +1219,89 @@
       } else if (!trimmedString(input.exportedAt) || !Number.isFinite(Date.parse(input.exportedAt))) {
         addMunicipalityWarning(validation, "CITY_PACKAGE_EXPORTED_AT_INVALID", rawCityId,
           "Der Exportzeitpunkt der Stadtdatei ist nicht lesbar.");
+      }
+
+      if (input.package !== undefined) {
+        const pkg = input.package;
+        if (!pkg || typeof pkg !== "object" || Array.isArray(pkg)) {
+          addPackageIssue(validation, "PACKAGE_METADATA_INVALID", rawCityId,
+            "Die Paketmetadaten sind ungültig.");
+        } else {
+          const pkgId = trimmedString(pkg.id);
+          if (!pkgId || !/^[a-z0-9][a-z0-9-_.]*$/i.test(pkgId) || pkgId.length > 120) {
+            addPackageIssue(validation, "PACKAGE_ID_INVALID", rawCityId,
+              "Die Paket-ID ist ungültig. Erlaubt sind 1–120 Zeichen (Buchstaben, Ziffern, Bindestrich, Punkt, Unterstrich).");
+          }
+
+          const pkgType = trimmedString(pkg.type);
+          if (pkgType !== "curated" && pkgType !== "osm" && pkgType !== "imported") {
+            addPackageIssue(validation, "PACKAGE_TYPE_INVALID", rawCityId,
+              `Der Pakettyp "${pkgType}" ist unzulässig. Gültig sind "curated" oder "osm".`);
+          }
+
+          if (pkgType === "curated") {
+            const version = trimmedString(pkg.version);
+            if (!version || !parseSemver(version)) {
+              addPackageIssue(validation, "PACKAGE_VERSION_INVALID", rawCityId,
+                "Die kuratierte Paketversion muss ein gültiges SemVer-Format (MAJOR.MINOR.PATCH) sein.");
+            }
+
+            const title = trimmedString(pkg.title);
+            if (!title || title.length > 120) {
+              addPackageIssue(validation, "PACKAGE_TITLE_INVALID", rawCityId,
+                "Der Pakettitel muss zwischen 1 und 120 Zeichen lang sein.");
+            }
+
+            const verification = pkg.verification;
+            if (!verification || typeof verification !== "object" || Array.isArray(verification)) {
+              addPackageIssue(validation, "PACKAGE_VERIFICATION_INVALID", rawCityId,
+                "Die Prüfmetadaten des Pakets fehlen oder sind ungültig.");
+            } else {
+              const status = trimmedString(verification.status);
+              if (status !== "verified" && status !== "unverified") {
+                addPackageIssue(validation, "PACKAGE_VERIFICATION_STATUS_INVALID", rawCityId,
+                  "Der Verifizierungsstatus muss \"verified\" oder \"unverified\" sein.");
+              }
+              if (status === "verified") {
+                const maintainer = trimmedString(verification.maintainer);
+                if (!maintainer || maintainer.length > 120) {
+                  addPackageIssue(validation, "PACKAGE_MAINTAINER_MISSING", rawCityId,
+                    "Für ein geprüftes Trainingspaket muss ein Maintainer angegeben sein (max. 120 Zeichen).");
+                }
+                const verifiedAt = trimmedString(verification.verifiedAt);
+                if (!verifiedAt || !Number.isFinite(Date.parse(verifiedAt))) {
+                  addPackageIssue(validation, "PACKAGE_VERIFIED_AT_INVALID", rawCityId,
+                    "Das Prüfdatum des Pakets ist ungültig.");
+                }
+                const note = verification.note !== undefined ? verification.note : verification.verificationNote;
+                if (note !== undefined && (typeof note !== "string" || note.length > 500)) {
+                  addPackageIssue(validation, "PACKAGE_VERIFICATION_NOTE_INVALID", rawCityId,
+                    "Der Prüfhinweis darf maximal 500 Zeichen lang sein.");
+                }
+              }
+            }
+          } else if (pkg.version !== undefined) {
+            const version = trimmedString(pkg.version);
+            if (version && !parseSemver(version)) {
+              addPackageIssue(validation, "PACKAGE_VERSION_INVALID", rawCityId,
+                "Die Paketversion muss ein gültiges SemVer-Format (MAJOR.MINOR.PATCH) sein.");
+            }
+          }
+
+          if (pkg.contentHash !== undefined) {
+            const hashStr = trimmedString(pkg.contentHash);
+            if (!/^(sha256:)?[0-9a-f]{64}$/i.test(hashStr)) {
+              addPackageIssue(validation, "PACKAGE_HASH_FORMAT_INVALID", rawCityId,
+                "Das Format der Prüfsumme ist ungültig (erwartet: SHA-256).");
+            } else {
+              const hashCheck = verifyPackageHash(input);
+              if (!hashCheck.valid) {
+                addPackageIssue(validation, "PACKAGE_HASH_MISMATCH", rawCityId,
+                  "Die Prüfsumme des Stadtpakets stimmt nicht mit dem Inhalt überein. Die Datei ist möglicherweise beschädigt oder wurde manipuliert.");
+              }
+            }
+          }
+        }
       }
 
       const city = input.city;
@@ -1071,11 +1441,55 @@
     validation.valid = valid;
     validation.summary = { warningCount, errorCount };
 
+    let normalizedPackage = null;
+    if (input?.package && typeof input.package === "object" && !Array.isArray(input.package)) {
+      const p = input.package;
+      const v = p.verification && typeof p.verification === "object" ? p.verification : null;
+      normalizedPackage = {
+        id: trimmedString(p.id) || null,
+        type: trimmedString(p.type) || "osm",
+        version: trimmedString(p.version) || null,
+        title: trimmedString(p.title) || null,
+        createdAt: p.createdAt || null,
+        updatedAt: p.updatedAt || null,
+        source: trimmedString(p.source) || (p.type === "curated" ? "curated" : "openstreetmap"),
+        verification: v ? {
+          status: trimmedString(v.status) || "unverified",
+          verifiedAt: v.verifiedAt || null,
+          maintainer: trimmedString(v.maintainer) || null,
+          note: trimmedString(v.note !== undefined ? v.note : v.verificationNote) || null
+        } : { status: "unverified" },
+        contentHash: trimmedString(p.contentHash) || null
+      };
+      if (p.legacy) {
+        normalizedPackage.legacy = true;
+      }
+    } else {
+      normalizedPackage = {
+        id: null,
+        type: "osm",
+        version: null,
+        title: null,
+        createdAt: null,
+        updatedAt: null,
+        source: "openstreetmap",
+        verification: { status: "unverified" },
+        contentHash: null,
+        legacy: true
+      };
+    }
+
+    const resultCity = valid ? cloneValue(input.city) : null;
+    if (resultCity && normalizedPackage && !normalizedPackage.legacy) {
+      resultCity.package = cloneValue(normalizedPackage);
+    }
+
     return {
       valid,
       schemaVersion: input?.schemaVersion,
       exportedAt: input?.exportedAt,
-      city: valid ? cloneValue(input.city) : null,
+      package: valid ? normalizedPackage : null,
+      city: resultCity,
       streets: valid ? cloneValue(input.streets) : [],
       pois: valid ? cloneValue(input.pois) : [],
       areas: valid && Array.isArray(input?.areas) ? cloneValue(input.areas) : [],
@@ -2116,6 +2530,13 @@
     compareWithCuratedData,
     assignAreasToEntities,
     validateArea: validateImportedArea,
-    findAreaParentCycle
+    findAreaParentCycle,
+    sha256Hex,
+    canonicalJsonStringify,
+    parseSemver,
+    comparePackageVersions,
+    buildCanonicalPackageData,
+    computePackageHash,
+    verifyPackageHash
   });
 });

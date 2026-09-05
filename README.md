@@ -377,8 +377,11 @@ Alle Dateipfade sind relativ aufgebaut und funktionieren deshalb auch in einem P
 - `tests/city-package-tests.js`: Phase-9-Format, Sicherheitsfehler, Atomizität und semantische Roundtrips
 - `.nojekyll`: verhindert eine unnötige Jekyll-Verarbeitung bei GitHub Pages
 
-## Externe Dienste
+## Kartenarchitektur & Offline-Betrieb
 
-Die Installation zusätzlicher Städte verwendet Nominatim und Overpass. Das eigentliche Spiel liest Straßen, POIs und Geometrien ausschließlich aus IndexedDB und ruft weder Nominatim noch Overpass auf. Oberasbach wird vollständig aus dem lokalen Default-Paket installiert. Lediglich die Kartenkacheln werden weiterhin vom konfigurierten beschriftungsfreien CARTO-Kartenstil geladen.
+- **Online**: Gewohntes, detailreiches Kartenbild über den beschriftungsfreien CARTO-Kachelstil (`_nolabels`).
+- **Offline**: Autarke lokale Orientierungskarte über einen performanten Canvas-Vektorlayer (`offline-basemap.js`), der die in IndexedDB gespeicherten Straßengeometrien und Gemeindegrenzen ohne externe Kacheln und ohne Netzwerkzugriff rendert. Bei Netzausfall oder Kachelfehlern schaltet die Anwendung automatisch auf die lokale Vektor-Basiskarte um.
+
+Die Installation zusätzlicher Städte verwendet bei bestehender Internetverbindung Nominatim und Overpass. Das eigentliche Spiel liest Straßen, POIs und Geometrien ausschließlich lokal aus IndexedDB und funktioniert offline vollständig ohne externe Server.
 
 Kartendaten © OpenStreetMap-Mitwirkende, ODbL. Kartenstil © CARTO.

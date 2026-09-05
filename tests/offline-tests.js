@@ -111,10 +111,10 @@ test("4. Service Worker definiert saubere Cache-Version und alle App-Shell-Datei
 
   // Wichtige Produktionsdateien müssen dabei sein
   const expected = [
-    "index.html", "styles.css", "app.js", "geometry.js", "targets.js",
+    "index.html", "styles.css", "app.js", "geometry.js", "poi-categories.js", "targets.js",
     "statistics.js", "game-engine.js", "timer.js", "city-storage.js",
     "city-data-validator.js", "city-package.js", "city-manager-ui.js",
-    "default-city.js", "osm-service.js", "manifest.webmanifest",
+    "default-city.js", "osm-service.js", "offline-basemap.js", "manifest.webmanifest",
     "data/cities/oberasbach.json", "vendor/leaflet/leaflet.js",
     "vendor/leaflet/leaflet.css", "vendor/turf/turf.min.js"
   ];
@@ -386,6 +386,75 @@ test("10. Stadtpaket Export und Import funktionieren ohne Internetverbindung", a
   assert.equal(validated.city.id, originalPkg.city.id);
   assert.equal(validated.streets.length, 271);
   assert.equal(validated.pois.length, 60);
+});
+
+// ---------------------------------------------------------------------------
+// 11. Offline-Basemap Integration
+// ---------------------------------------------------------------------------
+
+test("11. Offline-Basemap rendert lokales Straßennetz bei offline-Status ohne externe Kacheln", async () => {
+  const offlineBasemapApi = require("../offline-basemap.js");
+  const defaultCityApi = require("../default-city.js");
+  const raw = fs.readFileSync(path.join(ROOT, "data/cities/oberasbach.json"), "utf-8");
+  const pkg = JSON.parse(raw);
+
+  let netCalls = 0;
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = () => {
+    netCalls += 1;
+    return Promise.reject(new Error("Offline"));
+  };
+
+  try {
+    const mockMap = {
+      _listeners: {},
+      on(e, fn) { this._listeners[e] = this._listeners[e] || []; this._listeners[e].push(fn); },
+      off(e, fn) {},
+      getBounds() {
+        return {
+          getSouthWest: () => ({ lat: pkg.city.bounds.south, lng: pkg.city.bounds.west }),
+          getNorthEast: () => ({ lat: pkg.city.bounds.north, lng: pkg.city.bounds.east })
+        };
+      },
+      getSize() { return { x: 800, y: 600 }; },
+      getZoom() { return 13; },
+      getContainer() { return { classList: { toggle() {} } }; },
+      getPane() { return null; },
+      createPane() { return { style: {}, appendChild() {} }; },
+      latLngToContainerPoint(ll) { return { x: 400, y: 300 }; }
+    };
+
+    const layer = offlineBasemapApi.create({ map: mockMap });
+    layer.ctx = {
+      clearRect() {},
+      beginPath() {},
+      closePath() {},
+      moveTo() {},
+      lineTo() {},
+      stroke() {},
+      save() {},
+      restore() {},
+      setTransform() {},
+      setLineDash() {}
+    };
+    layer.canvas = { width: 800, height: 600, style: {} };
+
+    layer.setCityContext({
+      metadata: { ...pkg.city, boundary: pkg.boundary },
+      streetTargets: pkg.streets
+    });
+    layer.setEnabled(true);
+    layer.render();
+
+    const diag = layer.getDiagnostics();
+    assert.equal(diag.totalStreets, 271, "Oberasbach muss 271 Straßen haben");
+    assert.ok(diag.candidateStreets > 200, "In der Gesamtansicht fast alle Straßen sichtbar");
+    assert.equal(netCalls, 0, "Absolut 0 Netzwerkaufrufe beim Rendern der Offline-Basiskarte");
+
+    layer.destroy();
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });
 
 // ---------------------------------------------------------------------------

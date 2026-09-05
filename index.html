@@ -59,6 +59,7 @@
     <aside id="offlineBanner" class="offline-banner hidden" role="status" aria-live="polite">
       <span class="offline-banner-icon" aria-hidden="true">⚡</span>
       <span class="offline-banner-text">Offline · Bereits installierte Städte können weiterhin verwendet werden.</span>
+      <span id="offlineBasemapBadge" class="offline-basemap-badge hidden">Offline-Karte</span>
     </aside>
 
     <section class="game-layout">
@@ -427,6 +428,7 @@
   <script src="vendor/leaflet/leaflet.js"></script>
   <script src="vendor/turf/turf.min.js"></script>
   <script src="geometry.js?v=6.2"></script>
+  <script src="poi-categories.js?v=14.2"></script>
   <script src="targets.js?v=6.2"></script>
   <script src="statistics.js?v=7.0"></script>
   <script src="game-engine.js?v=6.2"></script>
@@ -436,7 +438,9 @@
   <script src="osm-service.js?v=10.5"></script>
   <script src="city-data-validator.js?v=10.0"></script>
   <script src="city-package.js?v=9.0"></script>
+  <script src="city-update.js?v=14.1"></script>
   <script src="city-manager-ui.js?v=10.5"></script>
+  <script src="offline-basemap.js?v=13.2"></script>
   <script src="config.local.js" onerror="window.STRASSENTRAINER_CONFIG = window.STRASSENTRAINER_CONFIG || {}"></script>
   <script src="app.js?v=8.0"></script>
 </body>

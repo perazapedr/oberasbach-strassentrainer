@@ -1,9 +1,9 @@
 /**
  * Straßentrainer - Service Worker
- * Phase 13.1: Offline-Grundlage und lokaler App-Shell
+ * Phase 14.3: Kuratierte Stadtpakete
  */
 
-const STATIC_CACHE = "strassentrainer-static-v1";
+const STATIC_CACHE = "strassentrainer-static-v5";
 
 const STATIC_ASSETS = [
   "./",
@@ -11,6 +11,7 @@ const STATIC_ASSETS = [
   "styles.css",
   "app.js",
   "geometry.js",
+  "poi-categories.js",
   "targets.js",
   "statistics.js",
   "game-engine.js",
@@ -18,9 +19,11 @@ const STATIC_ASSETS = [
   "city-storage.js",
   "city-data-validator.js",
   "city-package.js",
+  "city-update.js",
   "city-manager-ui.js",
   "default-city.js",
   "osm-service.js",
+  "offline-basemap.js",
   "manifest.webmanifest",
   "data/cities/oberasbach.json",
   "vendor/leaflet/leaflet.js",

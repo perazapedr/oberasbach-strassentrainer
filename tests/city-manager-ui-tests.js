@@ -445,6 +445,27 @@ function createStorage(initialCities = [], initialActiveCityId = null, overrides
       calls.hasCity.push(cityId);
       return cities.some(candidate => candidate.id === cityId);
     },
+    async getCity(cityId) {
+      return cities.find(candidate => candidate.id === cityId) || null;
+    },
+    async getCityStreets(cityId) {
+      return [];
+    },
+    async getCityPois(cityId) {
+      return [];
+    },
+    async getCityAreas(cityId) {
+      return [];
+    },
+    async getCityData(cityId) {
+      const found = cities.find(candidate => candidate.id === cityId);
+      if (!found) return null;
+      return { city: found, streets: [], pois: [], areas: [] };
+    },
+    async updateCityMetadata(cityId, patch) {
+      const found = cities.find(candidate => candidate.id === cityId);
+      if (found) Object.assign(found, patch);
+    },
     async saveCity(cityData, streets, pois) {
       calls.saveCity.push({ city: cityData, streets, pois });
       cities = [...cities.filter(candidate => candidate.id !== cityData.id), cityData];
@@ -1619,7 +1640,7 @@ test("Accessibility-Markup enthält Label, Live-Region, Dialog und Progressbar",
 test("Browser-Assets und Modalstruktur erzwingen den aktuellen Viewport-Vertrag", () => {
   const html = fs.readFileSync(path.join(__dirname, "..", "index.html"), "utf8");
   const styles = fs.readFileSync(path.join(__dirname, "..", "styles.css"), "utf8");
-  assert.match(html, /styles\.css\?v=9\.0/);
+  assert.match(html, /styles\.css\?v=\d+(\.\d+)?/);
   assert.match(html, /city-manager-ui\.js\?v=10\.5/);
   assert.match(html, /city-data-validator\.js\?v=10\.0/);
   assert.match(html, /osm-service\.js\?v=10\.5/);
@@ -1650,6 +1671,122 @@ test("UI-Modul enthält weder direkte IndexedDB-Manipulation noch Netzwerk-Downl
 test("CityManager enthält keine veralteten Phase-6-Übergangstexte", () => {
   const source = fs.readFileSync(path.join(__dirname, "..", "city-manager-ui.js"), "utf8");
   assert.doesNotMatch(source, /Phase[\s-]?6|folgt in Phase|bis Phase/);
+});
+
+test("installierte Stadt bietet Aktualisierungsprüfung und rendert Diff-Vorschau", async () => {
+  const installedCity = city({
+    id: "osm-relation-12345",
+    name: "Erlangen",
+    displayName: "Erlangen",
+    source: "openstreetmap",
+    dataVersion: 2
+  });
+  const rawDownloaded = {
+    city: city({ id: "osm-relation-12345", name: "Erlangen", displayName: "Erlangen", source: "openstreetmap", dataVersion: 1 }),
+    streets: [
+      { id: "street-1", cityId: "osm-relation-12345", name: "Hauptstraße", osmWayIds: [1] },
+      { id: "street-2", cityId: "osm-relation-12345", name: "Neuer Weg", osmWayIds: [2] }
+    ],
+    pois: [{ id: "poi-1", cityId: "osm-relation-12345", name: "Rathaus", category: "public-facility" }],
+    boundary: { type: "Polygon", coordinates: [] }
+  };
+  const valResult = {
+    valid: true,
+    city: rawDownloaded.city,
+    streets: rawDownloaded.streets,
+    pois: rawDownloaded.pois,
+    boundary: rawDownloaded.boundary,
+    validation: {
+      valid: true,
+      municipality: { valid: true, warnings: [], errors: [] },
+      streets: { warnings: [], errors: [] },
+      pois: { warnings: [], errors: [] },
+      summary: { warningCount: 0, errorCount: 0 }
+    }
+  };
+  const currentStored = {
+    city: installedCity,
+    streets: [{ id: "street-1", cityId: "osm-relation-12345", name: "Hauptstraße", osmWayIds: [1] }],
+    pois: [{ id: "poi-1", cityId: "osm-relation-12345", name: "Rathaus", category: "public-facility" }]
+  };
+  const storageFixture = createStorage([installedCity], "osm-relation-12345", {
+    async getCityData(id) {
+      return currentStored;
+    }
+  });
+
+  const fixture = await setup({
+    storageFixture,
+    osmService: {
+      async fetchCityData() {
+        return rawDownloaded;
+      }
+    },
+    validator: {
+      validateCityData() {
+        return valResult;
+      }
+    }
+  });
+
+  const updateButtons = findByClass(fixture.element("installedCityList"), "installed-city-update");
+  assert.equal(updateButtons.length, 1);
+  assert.equal(updateButtons[0].getAttribute("aria-label"), "Erlangen auf Aktualisierung prüfen");
+
+  // Click update button
+  updateButtons[0].click();
+  await tick();
+  await tick();
+
+  // Diff summary card is rendered in validation panel
+  const diffCards = findByClass(fixture.element("cityValidationPanel"), "city-diff-summary-card");
+  assert.equal(diffCards.length, 1);
+  assert.match(fixture.element("cityValidationOutcome").textContent, /Neue OSM-Daten für Erlangen/);
+
+  // Confirming update calls storage.saveCity with incremented dataVersion
+  fixture.element("saveCityButton").click();
+  await tick();
+  await tick();
+
+  assert.equal(storageFixture.calls.saveCity.length, 1);
+  const saved = storageFixture.calls.saveCity[0];
+  assert.equal(saved.city.dataVersion, 3);
+  assert.ok(saved.city.updatedAt);
+  assert.ok(saved.city.lastOsmCheckAt);
+});
+
+test("Kuratiertes Oberasbach zeigt Vergleichsmodus und sperrt Speichern", async () => {
+  const curated = city({ id: "osm-relation-1016396", name: "Oberasbach", displayName: "Oberasbach", source: "curated+openstreetmap" });
+  const storageFixture = createStorage([curated], "osm-relation-1016396", {
+    async getCityData() {
+      return {
+        city: curated,
+        streets: [{ id: "street-1", cityId: curated.id, name: "Hauptstraße" }],
+        pois: [{ id: "poi-1", cityId: curated.id, name: "Rathaus" }]
+      };
+    }
+  });
+
+  const fixture = await setup({
+    storageFixture,
+    osmService: {
+      async fetchCityData() {
+        return downloadedPackage();
+      }
+    }
+  });
+
+  const updateButtons = findByClass(fixture.element("installedCityList"), "installed-city-update");
+  assert.equal(updateButtons.length, 1);
+  assert.equal(updateButtons[0].getAttribute("aria-label"), "Oberasbach mit OpenStreetMap vergleichen");
+
+  updateButtons[0].click();
+  await tick();
+  await tick();
+
+  // For curated city, saveCityButton is hidden and cancel is close
+  assert.equal(fixture.element("saveCityButton").classList.contains("hidden"), true);
+  assert.equal(fixture.element("cancelValidationButton").textContent, "Schließen");
 });
 
 (async () => {

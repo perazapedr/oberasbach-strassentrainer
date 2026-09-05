@@ -190,7 +190,19 @@ test("zentrale Nominatim-Konfiguration", async () => {
     "residential", "living_street", "unclassified", "tertiary", "secondary", "primary"
   ]);
   assert.deepEqual(POI_CATEGORY_DEFINITIONS.map(definition => definition.category), [
-    "fire_station", "school", "kindergarten", "supermarket"
+    "fire_station",
+    "police",
+    "hospital",
+    "nursing_care",
+    "school",
+    "kindergarten",
+    "public_building",
+    "supermarket",
+    "fuel",
+    "hotel",
+    "restaurant",
+    "sports_facility",
+    "company"
   ]);
 });
 

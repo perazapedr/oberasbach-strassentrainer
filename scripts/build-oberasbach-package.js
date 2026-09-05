@@ -123,8 +123,35 @@ function main() {
     createdAt: DATA_TIMESTAMP,
     updatedAt: DATA_TIMESTAMP
   };
+  const packageMeta = {
+    id: "de-oberasbach-fire-training",
+    type: "curated",
+    version: "1.0.0",
+    title: "Oberasbach – geprüftes Trainingspaket",
+    createdAt: "2026-08-28T00:00:00.000Z",
+    updatedAt: "2026-09-05T00:00:00.000Z",
+    source: "curated",
+    verification: {
+      status: "verified",
+      verifiedAt: "2026-09-05T00:00:00.000Z",
+      maintainer: "Straßentrainer",
+      note: "Straßen und relevante Einrichtungen redaktionell geprüft"
+    }
+  };
+  const tempCandidate = {
+    schemaVersion: 1,
+    package: packageMeta,
+    city,
+    streets,
+    pois
+  };
+  const validator = require("../city-data-validator.js");
+  packageMeta.contentHash = validator.computePackageHash(tempCandidate);
+  city.package = JSON.parse(JSON.stringify(packageMeta));
+
   const cityPackage = {
     schemaVersion: 1,
+    package: packageMeta,
     city,
     streets,
     pois,

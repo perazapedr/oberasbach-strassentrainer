@@ -6,13 +6,17 @@
   const commonJsValidator = typeof module === "object" && module.exports && typeof require === "function"
     ? require("./city-data-validator.js")
     : null;
+  const commonJsPoiCategories = typeof module === "object" && module.exports && typeof require === "function"
+    ? require("./poi-categories.js")
+    : null;
   const api = factory(
     (root && root.StreetGeometry) || commonJsGeometry,
-    (root && root.StrassentrainerCityDataValidator) || commonJsValidator
+    (root && root.StrassentrainerCityDataValidator) || commonJsValidator,
+    (root && root.StrassentrainerPoiCategories) || commonJsPoiCategories
   );
   if (typeof module === "object" && module.exports) module.exports = api;
   if (root) root.StrassentrainerOsmService = api;
-})(typeof globalThis !== "undefined" ? globalThis : this, function createOsmServiceApi(defaultGeometryApi, defaultValidatorApi) {
+})(typeof globalThis !== "undefined" ? globalThis : this, function createOsmServiceApi(defaultGeometryApi, defaultValidatorApi, defaultPoiCategoriesApi) {
   "use strict";
 
   const NOMINATIM_SEARCH_URL = "https://nominatim.openstreetmap.org/search";
@@ -51,32 +55,45 @@
     "loc_name"
   ]);
 
-  const POI_CATEGORY_DEFINITIONS = Object.freeze([
-    Object.freeze({
-      category: "fire_station",
-      categoryLabel: "Feuerwehr",
-      key: "amenity",
-      value: "fire_station"
-    }),
-    Object.freeze({
-      category: "school",
-      categoryLabel: "Schule",
-      key: "amenity",
-      value: "school"
-    }),
-    Object.freeze({
-      category: "kindergarten",
-      categoryLabel: "Kindergarten",
-      key: "amenity",
-      value: "kindergarten"
-    }),
-    Object.freeze({
-      category: "supermarket",
-      categoryLabel: "Supermarkt",
-      key: "shop",
-      value: "supermarket"
-    })
-  ]);
+  const poiCategoriesApi = defaultPoiCategoriesApi
+    || (typeof globalThis !== "undefined" && globalThis.StrassentrainerPoiCategories)
+    || null;
+
+  const POI_CATEGORY_DEFINITIONS = Object.freeze(
+    poiCategoriesApi
+      ? poiCategoriesApi.getAll().map(cat => Object.freeze({
+        category: cat.id,
+        categoryLabel: cat.singularLabel || cat.label,
+        key: cat.id === "supermarket" ? "shop" : (cat.id === "hotel" ? "tourism" : (cat.id === "company" ? "office" : "amenity")),
+        value: cat.id
+      }))
+      : [
+        Object.freeze({
+          category: "fire_station",
+          categoryLabel: "Feuerwehr",
+          key: "amenity",
+          value: "fire_station"
+        }),
+        Object.freeze({
+          category: "school",
+          categoryLabel: "Schule",
+          key: "amenity",
+          value: "school"
+        }),
+        Object.freeze({
+          category: "kindergarten",
+          categoryLabel: "Kindergarten",
+          key: "amenity",
+          value: "kindergarten"
+        }),
+        Object.freeze({
+          category: "supermarket",
+          categoryLabel: "Supermarkt",
+          key: "shop",
+          value: "supermarket"
+        })
+      ]
+  );
 
   const VALID_OSM_TYPES = new Set(["node", "way", "relation"]);
   const GERMAN_BASE_COLLATOR = new Intl.Collator("de", { sensitivity: "base" });
@@ -352,22 +369,23 @@
     }
     const timeout = Math.max(1, Math.floor(queryTimeoutSeconds));
     const highwayPattern = DEFAULT_STREET_HIGHWAY_TYPES.join("|");
-    const amenityPattern = POI_CATEGORY_DEFINITIONS
-      .filter(definition => definition.key === "amenity")
-      .map(definition => definition.value)
-      .join("|");
-
     const bbox = [chunk.south, chunk.west, chunk.north, chunk.east]
       .map(value => Number(value).toFixed(7))
       .join(",");
+    const poiClauses = poiCategoriesApi && typeof poiCategoriesApi.getOverpassPoiQueryClauses === "function"
+      ? poiCategoriesApi.getOverpassPoiQueryClauses(bbox)
+      : [
+        `  nwr(area.searchArea)(${bbox})["amenity"~"^(${POI_CATEGORY_DEFINITIONS.filter(d => d.key === "amenity").map(d => d.value).join("|")})$"]["name"];`,
+        `  nwr(area.searchArea)(${bbox})["shop"="supermarket"]["name"];`
+      ];
+
     return [
       `[out:json][timeout:${timeout}];`,
       `relation(${id})->.boundary;`,
       ".boundary map_to_area -> .searchArea;",
       "(",
       `  way(area.searchArea)(${bbox})["highway"~"^(${highwayPattern})$"]["name"];`,
-      `  nwr(area.searchArea)(${bbox})["amenity"~"^(${amenityPattern})$"]["name"];`,
-      `  nwr(area.searchArea)(${bbox})["shop"="supermarket"]["name"];`,
+      ...poiClauses,
       ");",
       "out tags geom;"
     ].join("\n");
@@ -554,6 +572,16 @@
 
   function getPoiCategory(tags) {
     if (!tags || typeof tags !== "object") return null;
+    if (poiCategoriesApi && typeof poiCategoriesApi.matchOsmCategory === "function") {
+      const match = poiCategoriesApi.matchOsmCategory(tags);
+      if (match) {
+        return {
+          category: match.id,
+          categoryLabel: match.singularLabel || match.label
+        };
+      }
+      return null;
+    }
     return POI_CATEGORY_DEFINITIONS.find(definition => tags[definition.key] === definition.value) || null;
   }
 

@@ -4,10 +4,16 @@
   const commonJsPackage = typeof module === "object" && module.exports && typeof require === "function"
     ? require("./city-package.js")
     : null;
-  const api = factory(root, commonJsPackage);
+  const commonJsUpdate = typeof module === "object" && module.exports && typeof require === "function"
+    ? require("./city-update.js")
+    : null;
+  const commonJsPoiCategories = typeof module === "object" && module.exports && typeof require === "function"
+    ? require("./poi-categories.js")
+    : null;
+  const api = factory(root, commonJsPackage, commonJsUpdate, commonJsPoiCategories);
   if (typeof module === "object" && module.exports) module.exports = api;
   if (root) root.StrassentrainerCityManager = api;
-})(typeof globalThis !== "undefined" ? globalThis : this, function createCityManagerApi(root, commonJsPackage) {
+})(typeof globalThis !== "undefined" ? globalThis : this, function createCityManagerApi(root, commonJsPackage, commonJsUpdate, commonJsPoiCategories) {
   "use strict";
 
   const STATES = Object.freeze({
@@ -48,6 +54,15 @@
     }
     if (context === "storage") {
       return "Die Stadt konnte nicht lokal gespeichert werden. Bitte versuche es erneut und prüfe, ob ausreichend lokaler Speicher verfügbar ist.";
+    }
+    if (context === "update") {
+      if (!isOnline) {
+        return "Du bist momentan offline.\n\nFür die Prüfung von Aktualisierungen wird eine Internetverbindung benötigt. Bereits installierte Städte können weiterhin gespielt werden.";
+      }
+      if (code === "TIMEOUT") {
+        return "Die Prüfung auf Aktualisierungen hat zu lange gedauert. Bitte versuche es erneut.";
+      }
+      return "Der OpenStreetMap-Datendienst konnte für die Aktualisierungsprüfung nicht erreicht werden. Bitte versuche es später erneut.";
     }
     if (context !== "download") {
       return "Der Stadtvorgang konnte nicht abgeschlossen werden. Bitte versuche es erneut.";
@@ -114,19 +129,31 @@
     "[tabindex]:not([tabindex=\"-1\"])"
   ].join(",");
 
+  const poiCategoriesApi = commonJsPoiCategories
+    || (root && root.StrassentrainerPoiCategories)
+    || (typeof globalThis !== "undefined" && globalThis.StrassentrainerPoiCategories)
+    || null;
+
   const CATEGORY_LABELS = Object.freeze({
     fire_station: "Feuerwehren",
+    police: "Polizei",
+    hospital: "Krankenhäuser",
+    nursing_care: "Pflegeeinrichtungen",
     school: "Schulen",
     kindergarten: "Kindergärten",
     childcare: "Kindertagesstätten",
     supermarket: "Supermärkte",
-    "senior-care": "Senioren- und Pflegeeinrichtungen",
     fuel: "Tankstellen",
+    hotel: "Hotels",
+    restaurant: "Gaststätten",
+    sports_facility: "Sportstätten",
+    company: "Unternehmen",
+    public_building: "Öffentliche Gebäude",
+    "senior-care": "Senioren- und Pflegeeinrichtungen",
     health: "Gesundheit",
     "public-facility": "Öffentliche Einrichtungen",
     "sports-leisure": "Sport und Freizeit",
     hospitality: "Gastronomie und Beherbergung",
-    company: "Unternehmen",
     "other-relevant": "Sonstige einsatzrelevante Orte"
   });
 
@@ -172,12 +199,44 @@
     return `osm-${osmType}-${osmId}`;
   }
 
+  function isUpdateableCity(city) {
+    if (!city || typeof city !== "object") return false;
+    let osmType = asText(city.osmType);
+    let osmId = Number(city.osmId);
+    if ((!osmType || !Number.isSafeInteger(osmId)) && typeof city.id === "string") {
+      const match = city.id.match(/^osm-([a-z]+)-(\d+)$/);
+      if (match) {
+        osmType = match[1];
+        osmId = Number(match[2]);
+      }
+    }
+    return osmType === "relation" && Number.isSafeInteger(osmId) && osmId > 0;
+  }
+
+  function isCuratedCity(city) {
+    if (!city || typeof city !== "object") return false;
+    if (city.package?.type === "curated") return true;
+    const source = asText(city.source);
+    return source.includes("curated") || city.id === "osm-relation-1016396";
+  }
+
+  function formatDate(dateValue) {
+    if (!dateValue) return "";
+    const date = new Date(dateValue);
+    if (!Number.isFinite(date.getTime())) return "";
+    const day = String(date.getDate()).padStart(2, "0");
+    const month = String(date.getMonth() + 1).padStart(2, "0");
+    const year = date.getFullYear();
+    return `${day}.${month}.${year}`;
+  }
+
   function createCityManager(options = {}) {
     const documentRef = options.document || (root && root.document) || null;
     const storage = options.storage || (root && root.StrassentrainerCityStorage) || null;
     const osmService = options.osmService || (root && root.StrassentrainerOsmService) || null;
     const validator = options.validator || (root && root.StrassentrainerCityDataValidator) || null;
     const packageApi = options.packageApi || (root && root.StrassentrainerCityPackage) || commonJsPackage;
+    const updateApi = options.updateApi || (root && root.StrassentrainerCityUpdate) || commonJsUpdate;
     const AbortControllerClass = options.AbortController
       || (root && root.AbortController)
       || (typeof AbortController !== "undefined" ? AbortController : null);
@@ -214,12 +273,18 @@
     let deleteTarget = null;
     let deleteOpen = false;
     let deleting = false;
-    let workflowSource = "download";
+     let workflowSource = "download";
     let importedAlreadyInstalled = false;
     let importedActiveCity = false;
+    let importMode = "new";
+    let importConflictMessage = "";
+    let importInstalledCity = null;
+    let importDiff = null;
     let completedCity = null;
     let completedActivationAvailable = false;
     let activatingCompletedCity = false;
+    let updatingCity = null;
+    let updateDiff = null;
     let importOperationId = 0;
     const exportingCityIds = new Set();
     let canChangeCity = typeof options.canChangeCity === "function" ? options.canChangeCity : () => true;
@@ -344,13 +409,48 @@
         selectButton.dataset.cityId = city.id;
 
         const label = makeElement("span", "installed-city-name", municipalityName(city));
+        const isCurated = isCuratedCity(city);
+        if (isCurated) {
+          const badge = makeElement("span", "city-badge curated", "Kuratiert");
+          badge.title = "Redaktionell strukturiertes Trainingspaket. Daten werden nicht automatisch durch OpenStreetMap überschrieben.";
+          label.appendChild(badge);
+        }
         selectButton.appendChild(label);
         if (city.id === activeCityId) {
           selectButton.appendChild(makeElement("span", "installed-city-check installed-city-active", "✓"));
         }
         const context = municipalityContext(city);
-        if (context) selectButton.appendChild(makeElement("span", "installed-city-context", context));
+        let dataStand = "";
+        if (isCurated) {
+          const versionStr = city.package?.version ? `v${city.package.version}` : "v1.0.0";
+          const verifiedAt = city.package?.verification?.verifiedAt || city.updatedAt || city.createdAt;
+          const verifiedDate = verifiedAt ? formatDate(verifiedAt) : "";
+          dataStand = `Kuratiertes Trainingspaket ${versionStr}${verifiedDate ? ` · Paketangabe: ${verifiedDate}` : ""}`;
+        } else {
+          const standDate = city.updatedAt || city.createdAt ? formatDate(city.updatedAt || city.createdAt) : "";
+          dataStand = `OpenStreetMap-Daten${standDate ? ` · Datenstand: ${standDate}` : ""}`;
+        }
+        const details = [context, dataStand].filter(Boolean).join(" · ");
+        if (details) selectButton.appendChild(makeElement("span", "installed-city-context", details));
         selectButton.addEventListener("click", () => activateInstalledCity(city, { fromModal: false }));
+
+        let updateButton = null;
+        if (isUpdateableCity(city)) {
+          const isCurated = isCuratedCity(city);
+          updateButton = makeElement("button", "installed-city-update", "⟳");
+          updateButton.type = "button";
+          updateButton.setAttribute("role", "menuitem");
+          updateButton.dataset.cityId = city.id;
+          const updateLabel = isCurated
+            ? `${municipalityName(city)} mit OpenStreetMap vergleichen`
+            : `${municipalityName(city)} auf Aktualisierung prüfen`;
+          updateButton.setAttribute("aria-label", updateLabel);
+          updateButton.title = updateLabel;
+          updateButton.addEventListener("click", event => {
+            event.stopPropagation();
+            startCityUpdate(city, updateButton);
+          });
+        }
 
         const exportButton = makeElement("button", "installed-city-export", "⇩");
         exportButton.type = "button";
@@ -374,6 +474,7 @@
         });
 
         row.appendChild(selectButton);
+        if (updateButton) row.appendChild(updateButton);
         row.appendChild(exportButton);
         row.appendChild(deleteButton);
         elements.installedCityList.appendChild(row);
@@ -431,7 +532,7 @@
     function collectIssues(kind) {
       if (!validatedPackage || !validatedPackage.validation) return [];
       const report = validatedPackage.validation;
-      return ["municipality", "streets", "pois"].flatMap(sectionName => {
+      return ["package", "municipality", "streets", "pois", "areas"].flatMap(sectionName => {
         const section = report[sectionName];
         const issues = section && Array.isArray(section[kind]) ? section[kind] : [];
         return issues.map(issue => ({ ...issue, sectionName }));
@@ -455,11 +556,13 @@
       const groups = groupedIssues(issues);
       const visibleGroups = groups.slice(0, limit);
       const labels = {
+        package: "Trainingspaket",
         municipality: "Gemeinde",
         streets: "Straßen",
-        pois: "Einrichtungen"
+        pois: "Einrichtungen",
+        areas: "Trainingsgebiete"
       };
-      ["municipality", "streets", "pois"].forEach(sectionName => {
+      ["package", "municipality", "streets", "pois", "areas"].forEach(sectionName => {
         const sectionGroups = visibleGroups.filter(group => group.sectionName === sectionName);
         if (!sectionGroups.length) return;
         container.appendChild(makeElement("h4", "", labels[sectionName]));
@@ -479,9 +582,198 @@
       }
     }
 
+    function renderDiffDetailsList(container, title, items, formatFn) {
+      if (!items || items.length === 0) return;
+      const details = makeElement("details", "city-diff-details");
+      const summary = makeElement("summary", "city-diff-summary-item", `${title} (${items.length})`);
+      details.appendChild(summary);
+      const ul = makeElement("ul", "city-diff-list");
+      const maxDisplay = 30;
+      const count = Math.min(items.length, maxDisplay);
+      for (let i = 0; i < count; i += 1) {
+        const li = makeElement("li", "city-diff-list-item", formatFn(items[i]));
+        ul.appendChild(li);
+      }
+      if (items.length > maxDisplay) {
+        ul.appendChild(makeElement("li", "city-diff-more", `+ ${items.length - maxDisplay} weitere`));
+      }
+      details.appendChild(ul);
+      container.appendChild(details);
+    }
+
+    function renderUpdateDiffPanel(city, packageData, diff) {
+      const isCurated = isCuratedCity(updatingCity || city);
+      elements.cityPreviewMetadata.replaceChildren();
+      elements.cityPreviewMetadata.appendChild(makeElement("strong", "", municipalityName(city)));
+      const context = municipalityContext(city, true);
+      if (context) elements.cityPreviewMetadata.appendChild(documentRef.createTextNode(` · ${context}`));
+      elements.cityPreviewMetadata.appendChild(makeElement("br"));
+      const currentVer = updatingCity?.dataVersion || city?.dataVersion || 1;
+      const currentStand = updatingCity?.updatedAt || updatingCity?.createdAt || city?.updatedAt || city?.createdAt;
+      elements.cityPreviewMetadata.appendChild(documentRef.createTextNode(
+        `Installierte Version: ${currentVer}${currentStand ? ` (${formatDate(currentStand)})` : ""} · Quelle: ${isCurated ? "Kuratiert" : "OpenStreetMap"}`
+      ));
+
+      elements.previewCategoryCounts.replaceChildren();
+      setHidden(elements.cityWarningSummary, true);
+      setHidden(elements.toggleWarningDetailsButton, true);
+      setHidden(elements.cityWarningDetails, true);
+
+      elements.cityValidationOutcome.replaceChildren();
+      elements.cityValidationOutcome.classList.remove("invalid");
+
+      if (!diff || !diff.summary || !diff.summary.hasChanges) {
+        elements.cityValidationOutcome.appendChild(makeElement("h3", "", "Keine Aktualisierung erforderlich"));
+        elements.cityValidationOutcome.appendChild(makeElement(
+          "p",
+          "city-validation-success",
+          "Die installierte Stadt entspricht dem aktuell geladenen OSM-Stand."
+        ));
+        if (diff && diff.summary) {
+          const s = diff.summary;
+          const info = makeElement(
+            "p",
+            "city-diff-summary-text",
+            `${s.streets.unchanged} Straßen und ${s.pois.unchanged} Einrichtungen sind unverändert.`
+          );
+          elements.cityValidationOutcome.appendChild(info);
+        }
+        setHidden(elements.saveCityButton, true);
+        elements.cancelValidationButton.disabled = false;
+        elements.cancelValidationButton.textContent = "Schließen";
+        return;
+      }
+
+      // Changes exist
+      const headingText = isCurated
+        ? `OpenStreetMap-Vergleich für ${municipalityName(city)}`
+        : `Neue OSM-Daten für ${municipalityName(city)} gefunden`;
+      elements.cityValidationOutcome.appendChild(makeElement("h3", "", headingText));
+
+      if (isCurated) {
+        elements.cityValidationOutcome.appendChild(makeElement(
+          "p",
+          "city-validation-info",
+          "Kuratiertes Stadtpaket: OpenStreetMap dient als Vergleichsquelle. Kuratierte Daten werden nicht automatisch überschrieben."
+        ));
+      } else {
+        elements.cityValidationOutcome.appendChild(makeElement(
+          "p",
+          "city-validation-success",
+          "Folgende Änderungen gegenüber der lokal installierten Version wurden ermittelt:"
+        ));
+      }
+
+      const summaryBox = makeElement("div", "city-diff-summary-card");
+
+      // Streets
+      const sStreets = diff.summary.streets;
+      const streetBox = makeElement("div", "city-diff-group");
+      streetBox.appendChild(makeElement("strong", "city-diff-group-title", "Straßen"));
+      const streetBadges = makeElement("div", "city-diff-badges");
+      if (sStreets.added > 0) streetBadges.appendChild(makeElement("span", "badge-diff badge-added", `+ ${sStreets.added} neu`));
+      if (sStreets.removed > 0) streetBadges.appendChild(makeElement("span", "badge-diff badge-removed", `- ${sStreets.removed} entfernt`));
+      if (sStreets.modified > 0) streetBadges.appendChild(makeElement("span", "badge-diff badge-modified", `~ ${sStreets.modified} geändert`));
+      streetBadges.appendChild(makeElement("span", "badge-diff badge-unchanged", `= ${sStreets.unchanged} unverändert`));
+      streetBox.appendChild(streetBadges);
+      summaryBox.appendChild(streetBox);
+
+      // POIs
+      const sPois = diff.summary.pois;
+      const poiBox = makeElement("div", "city-diff-group");
+      poiBox.appendChild(makeElement("strong", "city-diff-group-title", "Einrichtungen"));
+      const poiBadges = makeElement("div", "city-diff-badges");
+      if (sPois.added > 0) poiBadges.appendChild(makeElement("span", "badge-diff badge-added", `+ ${sPois.added} neu`));
+      if (sPois.removed > 0) poiBadges.appendChild(makeElement("span", "badge-diff badge-removed", `- ${sPois.removed} entfernt`));
+      if (sPois.modified > 0) poiBadges.appendChild(makeElement("span", "badge-diff badge-modified", `~ ${sPois.modified} geändert`));
+      poiBadges.appendChild(makeElement("span", "badge-diff badge-unchanged", `= ${sPois.unchanged} unverändert`));
+      poiBox.appendChild(poiBadges);
+      summaryBox.appendChild(poiBox);
+
+      // Areas
+      const sAreas = diff.summary.areas;
+      if (sAreas.totalCandidate > 0 || sAreas.totalCurrent > 0) {
+        const areaBox = makeElement("div", "city-diff-group");
+        areaBox.appendChild(makeElement("strong", "city-diff-group-title", "Trainingsgebiete"));
+        const areaBadges = makeElement("div", "city-diff-badges");
+        if (sAreas.added > 0) areaBadges.appendChild(makeElement("span", "badge-diff badge-added", `+ ${sAreas.added} neu`));
+        if (sAreas.removed > 0) areaBadges.appendChild(makeElement("span", "badge-diff badge-removed", `- ${sAreas.removed} entfernt`));
+        if (sAreas.modified > 0) areaBadges.appendChild(makeElement("span", "badge-diff badge-modified", `~ ${sAreas.modified} geändert`));
+        if (sAreas.added === 0 && sAreas.removed === 0 && sAreas.modified === 0) {
+          areaBadges.appendChild(makeElement("span", "badge-diff badge-unchanged", "keine Änderungen"));
+        } else {
+          areaBadges.appendChild(makeElement("span", "badge-diff badge-unchanged", `= ${sAreas.unchanged} unverändert`));
+        }
+        areaBox.appendChild(areaBadges);
+        summaryBox.appendChild(areaBox);
+      }
+
+      elements.cityValidationOutcome.appendChild(summaryBox);
+
+      // Expandable lists
+      const detailsContainer = makeElement("div", "city-diff-details-container");
+      renderDiffDetailsList(detailsContainer, "Neue Straßen", diff.streets.added, item => item.name);
+      renderDiffDetailsList(detailsContainer, "Entfernte Straßen", diff.streets.removed, item => item.name);
+      renderDiffDetailsList(detailsContainer, "Geänderte Straßen", diff.streets.modified, item => {
+        const changeTypes = [];
+        if (item.changes.name) changeTypes.push(`Name: „${item.previousName}“ → „${item.name}“`);
+        if (item.changes.geometry) changeTypes.push("Geometrie");
+        if (item.changes.aliases) changeTypes.push("Aliase");
+        if (item.changes.osmWayIds) changeTypes.push("Way-Zusammensetzung");
+        return `${item.name} (${changeTypes.join(", ")})`;
+      });
+      if (diff.streets.possibleRenames && diff.streets.possibleRenames.length > 0) {
+        renderDiffDetailsList(detailsContainer, "Mögliche Umbenennungen (gleiche OSM-Ways)", diff.streets.possibleRenames, item => {
+          return `„${item.oldName}“ → „${item.newName}“ (${item.sharedWayCount} gemeinsame Ways)`;
+        });
+      }
+
+      renderDiffDetailsList(detailsContainer, "Neue Einrichtungen", diff.pois.added, item => `${item.name} (${item.categoryLabel || item.category || ""})`);
+      renderDiffDetailsList(detailsContainer, "Entfernte Einrichtungen", diff.pois.removed, item => `${item.name} (${item.categoryLabel || item.category || ""})`);
+      renderDiffDetailsList(detailsContainer, "Geänderte Einrichtungen", diff.pois.modified, item => {
+        const changeTypes = [];
+        if (item.changes.name) changeTypes.push(`Name: „${item.previousName}“ → „${item.name}“`);
+        if (item.changes.category) changeTypes.push("Kategorie");
+        if (item.changes.position) changeTypes.push("Position");
+        if (item.changes.address) changeTypes.push("Adresse");
+        if (item.changes.geometry) changeTypes.push("Geometrie");
+        return `${item.name} (${changeTypes.join(", ")})`;
+      });
+
+      renderDiffDetailsList(detailsContainer, "Neue Trainingsgebiete", diff.areas.added, item => item.name);
+      renderDiffDetailsList(detailsContainer, "Entfernte Trainingsgebiete", diff.areas.removed, item => item.name);
+      renderDiffDetailsList(detailsContainer, "Geänderte Trainingsgebiete", diff.areas.modified, item => {
+        const changeTypes = [];
+        if (item.changes.name) changeTypes.push(`Name: „${item.previousName}“ → „${item.name}“`);
+        if (item.changes.parentId) changeTypes.push("Hierarchie");
+        if (item.changes.bounds || item.changes.boundary) changeTypes.push("Gebietsgrenze");
+        return `${item.name} (${changeTypes.join(", ")})`;
+      });
+
+      elements.cityValidationOutcome.appendChild(detailsContainer);
+
+      // Buttons
+      if (isCurated) {
+        setHidden(elements.saveCityButton, true);
+        elements.cancelValidationButton.textContent = "Schließen";
+        elements.cancelValidationButton.disabled = false;
+      } else {
+        setHidden(elements.saveCityButton, false);
+        elements.saveCityButton.disabled = phase === STATES.SAVING;
+        elements.saveCityButton.textContent = phase === STATES.SAVING ? "Update wird gespeichert …" : "Update übernehmen";
+        elements.cancelValidationButton.textContent = "Nicht aktualisieren";
+        elements.cancelValidationButton.disabled = phase === STATES.SAVING;
+      }
+    }
+
     function renderValidation() {
       const packageData = validatedPackage || {};
       const city = packageData.city || {};
+      if (workflowSource === "update") {
+        renderUpdateDiffPanel(city, packageData, updateDiff);
+        return;
+      }
+      setHidden(elements.saveCityButton, false);
       const streets = Array.isArray(packageData.streets) ? packageData.streets : [];
       const pois = Array.isArray(packageData.pois) ? packageData.pois : [];
       const fireStationCount = pois.filter(poi => poi && poi.category === "fire_station").length;
@@ -507,7 +799,10 @@
         if (!category) return;
         const current = categoryCounts.get(category) || {
           count: 0,
-          label: asText(poi.categoryLabel) || CATEGORY_LABELS[category] || category
+          label: asText(poi.categoryLabel)
+            || (poiCategoriesApi && poiCategoriesApi.getLabel(category))
+            || CATEGORY_LABELS[category]
+            || category
         };
         current.count += 1;
         categoryCounts.set(category, current);
@@ -541,13 +836,87 @@
             : "Gemeindegrenze, Straßengeometrien und Einrichtungen wurden geprüft.")
           : "Die Daten wurden geladen, konnten aber nicht als vollständiges spielbares Stadtpaket bestätigt werden."
       ));
-      if (workflowSource === "import" && importedAlreadyInstalled) {
-        elements.cityValidationOutcome.appendChild(makeElement(
-          "p",
-          "city-validation-error",
-          "Diese Stadt ist bereits installiert. Sie wird nur nach einem ausdrücklichen Klick ersetzt."
-        ));
+      if (workflowSource === "import" && packageData.package && !packageData.package.legacy) {
+        const pkg = packageData.package;
+        const card = makeElement("div", "city-package-preview-card");
+        const header = makeElement("div", "city-package-preview-header");
+        const isCurated = pkg.type === "curated";
+        header.appendChild(makeElement("span", isCurated ? "city-badge curated" : "city-badge osm", isCurated ? "Kuratiert" : "OSM"));
+        header.appendChild(makeElement("strong", "city-package-preview-title", `${pkg.title || municipalityName(city)} (v${pkg.version || "1.0.0"})`));
+        card.appendChild(header);
+
+        const meta = makeElement("div", "city-package-meta");
+        meta.appendChild(makeElement("div", "city-package-meta-row", `Paket-ID: ${pkg.id}`));
+        if (isCurated && pkg.verification) {
+          const selfDeclared = makeElement("div", "city-package-meta-row city-package-self-declared", "Paketangaben (selbstdeklariert):");
+          meta.appendChild(selfDeclared);
+          if (pkg.verification.maintainer) {
+            meta.appendChild(makeElement("div", "city-package-meta-row", `· Maintainer: ${pkg.verification.maintainer}`));
+          }
+          if (pkg.verification.verifiedAt) {
+            meta.appendChild(makeElement("div", "city-package-meta-row", `· Stand: ${formatDate(pkg.verification.verifiedAt)}`));
+          }
+          if (pkg.verification.note) {
+            meta.appendChild(makeElement("div", "city-package-meta-row", `· Hinweis: ${pkg.verification.note}`));
+          }
+        }
+        if (pkg.contentHash) {
+          const hashRow = makeElement("div", "city-package-meta-row city-package-hash-row");
+          hashRow.appendChild(documentRef.createTextNode("Dateiintegrität (SHA-256): "));
+          const hashPrefix = pkg.contentHash.length > 20 ? `${pkg.contentHash.substring(0, 19)}…` : pkg.contentHash;
+          const codeEl = makeElement("code", "city-package-hash", hashPrefix);
+          codeEl.title = `${pkg.contentHash} (Prüfsumme bestätigt die Unverfälschtheit des Dateiinhalts, keine kryptografische Autoren-Signatur)`;
+          hashRow.appendChild(codeEl);
+          meta.appendChild(hashRow);
+        }
+        card.appendChild(meta);
+        elements.cityValidationOutcome.appendChild(card);
       }
+
+      if (workflowSource === "import" && importedAlreadyInstalled) {
+        if (importMode === "blocked") {
+          elements.cityValidationOutcome.appendChild(makeElement(
+            "div",
+            "city-validation-error city-import-conflict-banner",
+            importConflictMessage || "Der Import ist für diese Stadt blockiert."
+          ));
+        } else if (importMode === "same") {
+          elements.cityValidationOutcome.appendChild(makeElement(
+            "div",
+            "city-validation-info city-import-same-banner",
+            importConflictMessage || "Dieses Trainingspaket ist bereits in der gleichen Version installiert."
+          ));
+        } else if (importMode === "update") {
+          elements.cityValidationOutcome.appendChild(makeElement(
+            "div",
+            "city-validation-success city-import-update-banner",
+            importConflictMessage || "Ein Update für das installierte Trainingspaket liegt vor."
+          ));
+        } else {
+          elements.cityValidationOutcome.appendChild(makeElement(
+            "p",
+            "city-validation-error",
+            importConflictMessage || "Diese Stadt ist bereits installiert. Sie wird nur nach einem ausdrücklichen Klick ersetzt."
+          ));
+        }
+      }
+
+      if (workflowSource === "import" && importDiff && importDiff.summary) {
+        const diffBox = makeElement("div", "city-update-preview-box");
+        diffBox.appendChild(makeElement("h4", "city-diff-title", "Änderungen zur installierten Version"));
+        const pills = makeElement("div", "city-diff-pills");
+        const s = importDiff.summary.streets;
+        pills.appendChild(makeElement("span", "diff-pill", `Straßen: +${s.added} / -${s.removed} / ~${s.modified}`));
+        const p = importDiff.summary.pois;
+        pills.appendChild(makeElement("span", "diff-pill", `Einrichtungen: +${p.added} / -${p.removed} / ~${p.modified}`));
+        if (importDiff.summary.areas) {
+          const a = importDiff.summary.areas;
+          pills.appendChild(makeElement("span", "diff-pill", `Gebiete: +${a.added} / -${a.removed} / ~${a.modified}`));
+        }
+        diffBox.appendChild(pills);
+        elements.cityValidationOutcome.appendChild(diffBox);
+      }
+
       if (errors.length) {
         const errorList = makeElement("div", "city-validation-errors");
         appendIssueList(errorList, errors, 8);
@@ -564,13 +933,38 @@
       setHidden(elements.cityWarningDetails, warnings.length === 0 || !warningDetailsExpanded);
       appendIssueList(elements.cityWarningDetails, warnings, 20);
 
-      elements.saveCityButton.disabled = !packageData.valid || phase === STATES.SAVING;
-      if (phase === STATES.SAVING) elements.saveCityButton.textContent = "Stadt wird gespeichert …";
-      else if (workflowSource === "import" && importedAlreadyInstalled) {
-        elements.saveCityButton.textContent = "Vorhandene Stadt ersetzen";
-      } else if (workflowSource === "import") elements.saveCityButton.textContent = "Importieren";
-      else elements.saveCityButton.textContent = "Stadt speichern";
+      const isBlocked = importMode === "blocked" || importMode === "same";
+      elements.saveCityButton.disabled = !packageData.valid || phase === STATES.SAVING || isBlocked;
+      setHidden(elements.saveCityButton, isBlocked && importMode === "blocked");
+
+      if (phase === STATES.SAVING) {
+        elements.saveCityButton.textContent = "Stadt wird gespeichert …";
+      } else if (workflowSource === "import") {
+        if (importMode === "update") {
+          const fromVer = importInstalledCity?.package?.version || "1.0.0";
+          const toVer = packageData.package?.version || "1.0.0";
+          elements.saveCityButton.textContent = `Paket aktualisieren (v${fromVer} → v${toVer})`;
+        } else if (importMode === "replace") {
+          const isIncomingCurated = Boolean(packageData.package && packageData.package.type === "curated" && !packageData.package.legacy);
+          elements.saveCityButton.textContent = isIncomingCurated
+            ? "Auf kuratiertes Paket aktualisieren"
+            : "Vorhandene Stadt ersetzen";
+        } else if (importMode === "same") {
+          elements.saveCityButton.textContent = "Bereits installiert";
+        } else if (importedAlreadyInstalled) {
+          elements.saveCityButton.textContent = "Vorhandene Stadt ersetzen";
+        } else {
+          elements.saveCityButton.textContent = "Importieren";
+        }
+      } else {
+        elements.saveCityButton.textContent = "Stadt speichern";
+      }
       elements.cancelValidationButton.disabled = phase === STATES.SAVING;
+      if (isBlocked) {
+        elements.cancelValidationButton.textContent = "Schließen";
+      } else {
+        elements.cancelValidationButton.textContent = "Abbrechen";
+      }
     }
 
     function render() {
@@ -628,7 +1022,18 @@
       setHidden(elements.selectedMunicipalityPanel, !selectedVisible);
       if (selectedMunicipality) {
         elements.selectedMunicipalityName.textContent = municipalityName(selectedMunicipality);
-        elements.selectedMunicipalityContext.textContent = municipalityContext(selectedMunicipality, true);
+        const baseContext = municipalityContext(selectedMunicipality, true);
+        const installedCity = selectedMunicipalityInstalled
+          ? installedCities.find(c => c.id === municipalityCityId(selectedMunicipality))
+          : null;
+        const dataStand = installedCity
+          ? (isCuratedCity(installedCity)
+            ? "Kuratiertes Stadtpaket"
+            : (installedCity.updatedAt || installedCity.createdAt
+              ? `Datenstand: ${formatDate(installedCity.updatedAt || installedCity.createdAt)}`
+              : ""))
+          : "";
+        elements.selectedMunicipalityContext.textContent = [baseContext, dataStand].filter(Boolean).join(" · ");
         elements.municipalityActionButton.disabled = [STATES.CHECKING_INSTALLED, STATES.ACTIVATING].includes(phase);
         if (phase === STATES.CHECKING_INSTALLED) {
           elements.municipalityActionButton.textContent = "Wird geprüft …";
@@ -641,13 +1046,33 @@
         } else {
           elements.municipalityActionButton.textContent = "Stadt herunterladen";
         }
+
+        let panelUpdateButton = elements.selectedMunicipalityPanel.querySelector
+          ? elements.selectedMunicipalityPanel.querySelector(".city-selected-update-button")
+          : null;
+        if (selectedMunicipalityInstalled && installedCity && isUpdateableCity(installedCity)) {
+          if (!panelUpdateButton) {
+            panelUpdateButton = makeElement("button", "secondary-button city-dialog-secondary city-selected-update-button");
+            panelUpdateButton.type = "button";
+            elements.selectedMunicipalityPanel.appendChild(panelUpdateButton);
+          }
+          setHidden(panelUpdateButton, false);
+          panelUpdateButton.textContent = isCuratedCity(installedCity)
+            ? "Mit OpenStreetMap vergleichen"
+            : "Auf Aktualisierung prüfen";
+          panelUpdateButton.onclick = () => startCityUpdate(installedCity, panelUpdateButton);
+        } else if (panelUpdateButton) {
+          setHidden(panelUpdateButton, true);
+        }
       }
 
       if (downloadVisible) {
-        const cityName = municipalityName(selectedMunicipality);
+        const cityName = municipalityName(selectedMunicipality || updatingCity);
         elements.cityDownloadTitle.textContent = phase === STATES.VALIDATING
           ? (workflowSource === "import" ? "Stadtdatei wird geprüft" : `${cityName} wird geprüft`)
-          : `${cityName} wird heruntergeladen`;
+          : (workflowSource === "update"
+            ? `${cityName} – OpenStreetMap-Stand wird geladen`
+            : `${cityName} wird heruntergeladen`);
         const progressValue = phase === STATES.VALIDATING ? 100 : clampProgress(progress.progress);
         elements.cityDownloadProgress.setAttribute("aria-valuenow", String(progressValue));
         elements.cityDownloadProgress.setAttribute("aria-valuetext", asText(progress.message) || "Download läuft");
@@ -690,9 +1115,11 @@
       if (downloadController) downloadController.abort();
       downloadController = null;
       if (wasDownloading && modalOpen && !options.closing) {
-        phase = selectedMunicipality ? STATES.MUNICIPALITY_SELECTED : STATES.IDLE;
+        phase = (selectedMunicipality && workflowSource !== "update") ? STATES.MUNICIPALITY_SELECTED : STATES.IDLE;
         alertMessage = "";
-        noticeMessage = "Download abgebrochen. Es wurden keine Stadtdaten gespeichert.";
+        noticeMessage = workflowSource === "update"
+          ? "Aktualisierungsprüfung abgebrochen. Es wurden keine Stadtdaten geändert."
+          : "Download abgebrochen. Es wurden keine Stadtdaten gespeichert.";
         progress = { stage: "", message: "Download wird vorbereitet …", progress: 0 };
         render();
         announce(noticeMessage);
@@ -717,12 +1144,19 @@
       workflowSource = "download";
       importedAlreadyInstalled = false;
       importedActiveCity = false;
+      importMode = "new";
+      importConflictMessage = "";
+      importInstalledCity = null;
+      importDiff = null;
       completedCity = null;
       completedActivationAvailable = false;
       activatingCompletedCity = false;
+      updatingCity = null;
+      updateDiff = null;
       if (elements) {
         elements.citySearchInput.value = "";
         elements.cityImportFileInput.value = "";
+        setHidden(elements.saveCityButton, false);
       }
     }
 
@@ -805,6 +1239,10 @@
       validatedPackage = null;
       importedAlreadyInstalled = false;
       importedActiveCity = false;
+      importMode = "new";
+      importConflictMessage = "";
+      importInstalledCity = null;
+      importDiff = null;
       alertMessage = "";
       noticeMessage = "";
       warningDetailsExpanded = false;
@@ -816,19 +1254,89 @@
         if (operationId !== importOperationId || !modalOpen) return;
         validatedPackage = result;
         if (result.valid && result.city?.id) {
-          importedAlreadyInstalled = await storage.hasCity(result.city.id);
+          const installedCity = await storage.getCity(result.city.id);
+          importedAlreadyInstalled = Boolean(installedCity);
+          importInstalledCity = installedCity || null;
           if (operationId !== importOperationId || !modalOpen) return;
           const currentRuntimeCityId = asText(runtimeCity()?.id);
           importedActiveCity = result.city.id === activeCityId || result.city.id === currentRuntimeCityId;
+
+          const isInstalledCurated = Boolean(installedCity?.package && installedCity.package.type === "curated" && !installedCity.package.legacy);
+          const isIncomingCurated = Boolean(result.package && result.package.type === "curated" && !result.package.legacy);
+
+          if (importedAlreadyInstalled) {
+            if (isInstalledCurated && !isIncomingCurated) {
+              importMode = "blocked";
+              importConflictMessage = "Für diese Stadt ist ein kuratiertes Trainingspaket installiert. Das unstrukturierte OSM-Paket kann das kuratierte Paket nicht überschreiben.";
+            } else if (!isInstalledCurated && isIncomingCurated) {
+              importMode = "replace";
+              importConflictMessage = "Das unstrukturierte OSM-Paket wird durch ein kuratiertes Trainingspaket ersetzt.";
+              try {
+                const currentData = await loadStoredCityData(result.city.id);
+                if (updateApi && typeof updateApi.compareCityVersions === "function" && currentData) {
+                  importDiff = updateApi.compareCityVersions(currentData, result);
+                }
+              } catch (_) {}
+            } else if (isInstalledCurated && isIncomingCurated) {
+              const installedPkg = installedCity.package || {};
+              const incomingPkg = result.package || {};
+              if (installedPkg.id && incomingPkg.id && installedPkg.id !== incomingPkg.id) {
+                importMode = "blocked";
+                importConflictMessage = `Die Paket-ID der Importdatei (${incomingPkg.id}) stimmt nicht mit dem installierten Trainingspaket (${installedPkg.id}) überein.`;
+              } else {
+                const versionComparison = validator.comparePackageVersions(installedPkg.version, incomingPkg.version);
+                if (versionComparison < 0) {
+                  importMode = "update";
+                  importConflictMessage = `Aktualisierung von Version ${installedPkg.version || "1.0.0"} auf ${incomingPkg.version}.`;
+                  try {
+                    const currentData = await loadStoredCityData(result.city.id);
+                    if (updateApi && typeof updateApi.compareCityVersions === "function" && currentData) {
+                      importDiff = updateApi.compareCityVersions(currentData, result);
+                    }
+                  } catch (_) {}
+                } else if (versionComparison === 0) {
+                  const hashesMatch = Boolean(
+                    installedPkg.contentHash
+                    && incomingPkg.contentHash
+                    && installedPkg.contentHash.trim() === incomingPkg.contentHash.trim()
+                  );
+                  if (hashesMatch) {
+                    importMode = "same";
+                    importConflictMessage = `Dieses Trainingspaket (Version ${incomingPkg.version}) ist bereits unverändert installiert.`;
+                  } else {
+                    importMode = "blocked";
+                    importConflictMessage = "Die Datei trägt dieselbe Paketversion wie das installierte Paket, enthält aber veränderte Daten. Import blockiert.";
+                  }
+                } else {
+                  importMode = "blocked";
+                  importConflictMessage = `Ältere Paketversion kann eine neuere nicht überschreiben (Installiert: v${installedPkg.version || "1.0.0"}, Datei: v${incomingPkg.version}).`;
+                }
+              }
+            } else {
+              importMode = "replace";
+              importConflictMessage = "Diese Stadt ist bereits installiert. Sie wird nur nach einem ausdrücklichen Klick ersetzt.";
+              try {
+                const currentData = await loadStoredCityData(result.city.id);
+                if (updateApi && typeof updateApi.compareCityVersions === "function" && currentData) {
+                  importDiff = updateApi.compareCityVersions(currentData, result);
+                }
+              } catch (_) {}
+            }
+          } else {
+            importMode = "new";
+            importConflictMessage = "";
+          }
         }
         phase = STATES.VALIDATION_RESULT;
         alertMessage = result.valid ? "" : packageApi.validationErrorMessage(result);
         render();
         announce(result.valid
-          ? `Importvorschau für ${municipalityName(result.city)} ist bereit. Es wurde noch nichts gespeichert.`
+          ? (importConflictMessage || `Importvorschau für ${municipalityName(result.city)} ist bereit.`)
           : alertMessage);
         schedule(() => {
-          const focusTarget = result.valid ? elements.saveCityButton : elements.cancelValidationButton;
+          const focusTarget = (result.valid && importMode !== "blocked" && importMode !== "same")
+            ? elements.saveCityButton
+            : elements.cancelValidationButton;
           if (focusTarget && typeof focusTarget.focus === "function") focusTarget.focus();
         }, 0);
       } catch (error) {
@@ -1108,7 +1616,140 @@
         storage.getCityStreets(cityId),
         storage.getCityPois(cityId)
       ]);
-      return city ? { city, streets, pois } : null;
+      const areas = typeof storage.getCityAreas === "function"
+        ? await storage.getCityAreas(cityId)
+        : [];
+      return city ? { city, streets, pois, areas } : null;
+    }
+
+    async function startCityUpdate(city, opener) {
+      if (!city || !city.id) return;
+      if (!isCityChangeAllowed()) {
+        explainBlockedCityChange();
+        return;
+      }
+      if (typeof navigator !== "undefined" && navigator.onLine === false) {
+        setHeaderStatus("Für die Aktualisierungsprüfung wird eine Internetverbindung benötigt. Bereits installierte Städte können weiterhin gespielt werden.");
+        announce("Für die Aktualisierungsprüfung wird eine Internetverbindung benötigt.");
+        if (modalOpen) {
+          phase = STATES.ERROR;
+          errorContext = "download";
+          alertMessage = "Für die Aktualisierungsprüfung wird eine Internetverbindung benötigt.\n\nBereits installierte Städte können weiterhin gespielt werden.";
+          render();
+        }
+        return;
+      }
+
+      if (!modalOpen) {
+        open(opener);
+      }
+      cancelDownload({ closing: true });
+      workflowSource = "update";
+      updatingCity = city;
+      selectedMunicipality = {
+        name: city.name,
+        displayName: city.displayName || city.name,
+        district: city.district,
+        state: city.state,
+        country: city.country,
+        postalCodes: city.postalCodes,
+        osmType: city.osmType || "relation",
+        osmId: city.osmId,
+        bounds: city.bounds,
+        center: city.center
+      };
+      const operationId = ++downloadOperationId;
+      const controller = new AbortControllerClass();
+      downloadController = controller;
+      phase = STATES.DOWNLOADING;
+      progress = { stage: "preparing", message: "Aktueller OpenStreetMap-Stand wird angefragt …", progress: 0 };
+      alertMessage = "";
+      noticeMessage = "";
+      validatedPackage = null;
+      updateDiff = null;
+      warningDetailsExpanded = false;
+      render();
+      announce(`${municipalityName(city)} wird gegen OpenStreetMap geprüft.`);
+
+      let validationStarted = false;
+      try {
+        const downloaded = await osmService.fetchCityData(selectedMunicipality, {
+          signal: controller.signal,
+          discoverAreas: true,
+          onProgress: nextProgress => {
+            if (operationId !== downloadOperationId || phase !== STATES.DOWNLOADING || !modalOpen) return;
+            progress = {
+              stage: asText(nextProgress && nextProgress.stage),
+              message: asText(nextProgress && nextProgress.message) || "Download läuft …",
+              progress: clampProgress(nextProgress && nextProgress.progress)
+            };
+            render();
+            announce(progress.message);
+          }
+        });
+        if (operationId !== downloadOperationId || !modalOpen || controller.signal.aborted) return;
+        phase = STATES.VALIDATING;
+        validationStarted = true;
+        render();
+        announce("Die heruntergeladenen Stadtdaten werden geprüft.");
+
+        const result = validator.validateCityData(downloaded, { sourceMode: "download" });
+        if (operationId !== downloadOperationId || !modalOpen || controller.signal.aborted) return;
+        if (!result || !result.valid) {
+          phase = STATES.ERROR;
+          errorContext = "validation";
+          alertMessage = "Die heruntergeladenen Stadtdaten konnten nicht sicher verwendet werden. Es wurde nichts geändert.";
+          render();
+          announce(alertMessage);
+          return;
+        }
+        validatedPackage = result;
+
+        const currentData = await loadStoredCityData(city.id);
+        if (operationId !== downloadOperationId || !modalOpen || controller.signal.aborted) return;
+        if (!currentData || !currentData.city) {
+          throw new Error("Die installierte Stadt konnte nicht für den Versionsvergleich geladen werden.");
+        }
+
+        if (!updateApi || typeof updateApi.compareCityVersions !== "function") {
+          throw new Error("Das Versionsvergleichs-Modul ist nicht verfügbar.");
+        }
+
+        const diff = updateApi.compareCityVersions(currentData, result);
+        updateDiff = diff;
+
+        if (!diff.summary.hasChanges) {
+          try {
+            const nowIso = new Date().toISOString();
+            await storage.updateCityMetadata(city.id, { lastOsmCheckAt: nowIso });
+            city.lastOsmCheckAt = nowIso;
+          } catch (_) {}
+        }
+
+        phase = STATES.VALIDATION_RESULT;
+        render();
+        announce(diff.summary.hasChanges
+          ? `Versionsvergleich für ${municipalityName(city)} abgeschlossen. Änderungen gefunden.`
+          : `Versionsvergleich für ${municipalityName(city)} abgeschlossen. Keine Änderungen.`);
+      } catch (error) {
+        if (operationId !== downloadOperationId || !modalOpen) return;
+        if (controller.signal.aborted || (error && error.code === "ABORTED")) {
+          phase = STATES.IDLE;
+          noticeMessage = "Aktualisierungsprüfung abgebrochen. Es wurden keine Stadtdaten geändert.";
+          render();
+          announce(noticeMessage);
+          return;
+        }
+        phase = STATES.ERROR;
+        errorContext = validationStarted ? "validation" : "download";
+        alertMessage = errorContext === "validation"
+          ? getUserFriendlyCityError(error, "validation")
+          : getUserFriendlyCityError(error, "download");
+        render();
+        announce(alertMessage);
+      } finally {
+        if (operationId === downloadOperationId) downloadController = null;
+      }
     }
 
     async function saveValidatedCity() {
@@ -1125,14 +1766,58 @@
       let previousActivePackage = null;
       let rollbackSucceeded = false;
       try {
+        if (workflowSource === "update") {
+          const currentCity = updatingCity || (await storage.getCity(validatedPackage.city.id));
+          const currentVersion = Number(currentCity?.dataVersion) || 1;
+          const nextVersion = currentVersion + 1;
+          const nowIso = new Date().toISOString();
+          const cityToSave = {
+            ...(validatedPackage.boundary && !validatedPackage.city.boundary
+              ? { ...validatedPackage.city, boundary: validatedPackage.boundary }
+              : validatedPackage.city),
+            id: currentCity.id,
+            osmId: currentCity.osmId,
+            osmType: currentCity.osmType || "relation",
+            source: currentCity.source || "openstreetmap",
+            createdAt: currentCity.createdAt || validatedPackage.city.createdAt || nowIso,
+            updatedAt: nowIso,
+            lastOsmCheckAt: nowIso,
+            dataVersion: nextVersion
+          };
+          await storage.saveCity(
+            cityToSave,
+            validatedPackage.streets,
+            validatedPackage.pois,
+            validatedPackage.areas || []
+          );
+          citySaved = true;
+
+          const isActive = currentCity.id === activeCityId || currentCity.id === runtimeCity()?.id;
+          if (isActive) {
+            await activateCity(cityToSave.id, { force: true });
+          }
+          await refreshInstalledCities();
+          phase = STATES.COMPLETED;
+          completedCity = cityToSave;
+          completedActivationAvailable = false;
+          elements.cityCompletedMessage.textContent = `${municipalityName(cityToSave)} wurde erfolgreich auf Version ${nextVersion} aktualisiert.${isActive ? " Die aktive Stadt wurde neu geladen." : ""}`;
+          setHeaderStatus(`${municipalityName(cityToSave)} wurde auf Version ${nextVersion} aktualisiert.`);
+          render();
+          announce(elements.cityCompletedMessage.textContent);
+          return;
+        }
+
         if (workflowSource === "import" && importedAlreadyInstalled && importedActiveCity) {
           previousActivePackage = await loadStoredCityData(validatedPackage.city.id);
           if (!previousActivePackage) {
             throw new Error("Die bisherige aktive Stadt konnte nicht für ein sicheres Ersetzen gelesen werden.");
           }
         }
+        const cityToSave = validatedPackage.boundary && !validatedPackage.city.boundary
+          ? { ...validatedPackage.city, boundary: validatedPackage.boundary }
+          : validatedPackage.city;
         await storage.saveCity(
-          validatedPackage.city,
+          cityToSave,
           validatedPackage.streets,
           validatedPackage.pois,
           validatedPackage.areas || []
@@ -1145,12 +1830,21 @@
         phase = STATES.COMPLETED;
         completedCity = validatedPackage.city;
         completedActivationAvailable = workflowSource === "import" && !importedActiveCity;
-        if (workflowSource === "import" && importedActiveCity) {
-          elements.cityCompletedMessage.textContent = `${municipalityName(validatedPackage.city)} wurde ersetzt. Der aktive Stadtkontext wurde vollständig neu geladen.`;
-          setHeaderStatus(`${municipalityName(validatedPackage.city)} wurde ersetzt und neu geladen.`);
-        } else if (workflowSource === "import") {
-          elements.cityCompletedMessage.textContent = `${municipalityName(validatedPackage.city)} wurde importiert. Die bisher aktive Stadt bleibt unverändert.`;
-          setHeaderStatus(`${municipalityName(validatedPackage.city)} wurde importiert.`);
+        if (workflowSource === "import") {
+          if (importMode === "update") {
+            const ver = validatedPackage.package?.version || "1.0.0";
+            elements.cityCompletedMessage.textContent = `${municipalityName(validatedPackage.city)} wurde erfolgreich auf Trainingspaket-Version ${ver} aktualisiert.${importedActiveCity ? " Der aktive Stadtkontext wurde neu geladen." : ""}`;
+            setHeaderStatus(`${municipalityName(validatedPackage.city)} wurde auf Version ${ver} aktualisiert.`);
+          } else if (importMode === "replace" && validatedPackage.package?.type === "curated") {
+            elements.cityCompletedMessage.textContent = `${municipalityName(validatedPackage.city)} wurde erfolgreich durch das kuratierte Trainingspaket ersetzt.${importedActiveCity ? " Der aktive Stadtkontext wurde neu geladen." : ""}`;
+            setHeaderStatus(`${municipalityName(validatedPackage.city)} wurde auf kuratiertes Paket umgestellt.`);
+          } else if (importedActiveCity) {
+            elements.cityCompletedMessage.textContent = `${municipalityName(validatedPackage.city)} wurde ersetzt. Der aktive Stadtkontext wurde vollständig neu geladen.`;
+            setHeaderStatus(`${municipalityName(validatedPackage.city)} wurde ersetzt und neu geladen.`);
+          } else {
+            elements.cityCompletedMessage.textContent = `${municipalityName(validatedPackage.city)} wurde importiert. Die bisher aktive Stadt bleibt unverändert.`;
+            setHeaderStatus(`${municipalityName(validatedPackage.city)} wurde importiert.`);
+          }
         } else {
           elements.cityCompletedMessage.textContent = `${municipalityName(validatedPackage.city)} wurde installiert, aktiviert und ist sofort spielbereit.`;
           setHeaderStatus(`${municipalityName(validatedPackage.city)} wurde installiert und aktiviert.`);
@@ -1216,7 +1910,23 @@
 
     function cancelValidation() {
       if (phase === STATES.SAVING) return;
+      if (workflowSource === "update") {
+        validatedPackage = null;
+        updateDiff = null;
+        updatingCity = null;
+        phase = STATES.IDLE;
+        alertMessage = "";
+        noticeMessage = "Die Aktualisierung wurde abgebrochen. Es wurden keine Stadtdaten geändert.";
+        warningDetailsExpanded = false;
+        render();
+        announce(noticeMessage);
+        return;
+      }
       validatedPackage = null;
+      importMode = "new";
+      importConflictMessage = "";
+      importInstalledCity = null;
+      importDiff = null;
       phase = selectedMunicipality ? STATES.MUNICIPALITY_SELECTED : STATES.IDLE;
       alertMessage = "";
       noticeMessage = workflowSource === "import"
@@ -1413,14 +2123,19 @@
         workflowSource,
         importedAlreadyInstalled,
         importedActiveCity,
+        importMode,
+        importConflictMessage,
+        importDiff,
         completedCity,
         completedActivationAvailable,
         deleteOpen,
-        deleteTarget
+        deleteTarget,
+        updatingCity,
+        updateDiff
       };
     }
 
-    const api = Object.freeze({ init, open, close, refreshInstalledCities, getState });
+    const api = Object.freeze({ init, open, close, refreshInstalledCities, getState, startCityUpdate });
     return api;
   }
 
@@ -1438,6 +2153,7 @@
     close: options => getDefaultManager().close(options),
     refreshInstalledCities: () => getDefaultManager().refreshInstalledCities(),
     getState: () => getDefaultManager().getState(),
+    startCityUpdate: (city, opener) => getDefaultManager().startCityUpdate(city, opener),
     createCityManager
   });
 });

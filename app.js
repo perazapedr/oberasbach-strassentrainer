@@ -5,6 +5,7 @@ const targetApi = window.StrassentrainerTargets;
 const statisticsApi = window.StrassentrainerStatistics;
 const defaultCityApi = window.StrassentrainerDefaultCity;
 const timerApi = window.StrassentrainerTimer;
+const offlineBasemapApi = window.StrassentrainerOfflineBasemap;
 const {
   GAME_STATUS,
   MODE_CONFIGS,
@@ -51,12 +52,25 @@ function recordRuntimeTiming(diagnostics, name, startedAt) {
   diagnostics.timingsMs[name] = Math.round((monotonicNow() - startedAt) * 10) / 10;
 }
 
+const poiCategoriesApi = (typeof window !== "undefined" && window.StrassentrainerPoiCategories)
+  || (typeof globalThis !== "undefined" && globalThis.StrassentrainerPoiCategories)
+  || null;
+
 const POI_CATEGORY_LABELS = Object.freeze({
   fire_station: "Feuerwehr",
-  school: "Schule",
-  kindergarten: "Kindergarten",
+  police: "Polizei",
+  hospital: "Krankenhäuser",
+  nursing_care: "Pflegeeinrichtungen",
+  school: "Schulen",
+  kindergarten: "Kindergärten",
   childcare: "Kindertagesstätte",
-  supermarket: "Supermarkt"
+  supermarket: "Supermärkte",
+  fuel: "Tankstellen",
+  hotel: "Hotels",
+  restaurant: "Gaststätten",
+  sports_facility: "Sportstätten",
+  company: "Unternehmen",
+  public_building: "Öffentliche Gebäude"
 });
 
 function cityName(metadata) {
@@ -94,6 +108,7 @@ const els = {
   statusCard: document.getElementById("statusCard"),
   statusText: document.getElementById("statusText"),
   offlineBanner: document.getElementById("offlineBanner"),
+  offlineBasemapBadge: document.getElementById("offlineBasemapBadge"),
   mapHint: document.getElementById("mapHint"),
   mapPanel: document.getElementById("mapPanel"),
   modeCard: document.getElementById("modeCard"),
@@ -176,19 +191,19 @@ const map = L.map("map", {
   preferCanvas: true
 });
 
-L.tileLayer(MAP_STYLE.tileUrl, {
+const baseTileLayer = L.tileLayer(MAP_STYLE.tileUrl, {
   subdomains: "abcd",
   maxZoom: 20,
   detectRetina: true,
   crossOrigin: true
-}).addTo(map);
+});
 
 const roadContrastPane = map.createPane("roadContrastPane");
 roadContrastPane.style.zIndex = "210";
 roadContrastPane.style.pointerEvents = "none";
 roadContrastPane.style.mixBlendMode = "multiply";
 
-L.tileLayer(MAP_STYLE.roadContrastUrl, {
+const contrastTileLayer = L.tileLayer(MAP_STYLE.roadContrastUrl, {
   pane: "roadContrastPane",
   minZoom: MAP_STYLE.roadContrastMinZoom,
   maxZoom: 20,
@@ -196,7 +211,112 @@ L.tileLayer(MAP_STYLE.roadContrastUrl, {
   subdomains: "abcd",
   detectRetina: true,
   crossOrigin: true
-}).addTo(map);
+});
+
+const offlineBasemap = (typeof offlineBasemapApi !== "undefined" && offlineBasemapApi && typeof offlineBasemapApi.create === "function")
+  ? offlineBasemapApi.create({ map })
+  : ((typeof window !== "undefined" && window.StrassentrainerOfflineBasemap && typeof window.StrassentrainerOfflineBasemap.create === "function")
+    ? window.StrassentrainerOfflineBasemap.create({ map })
+    : null);
+
+const TILE_ERROR_THRESHOLD = 6;
+const TILE_ERROR_WINDOW_MS = 10000;
+
+const basemapCoordinator = {
+  mode: "auto",
+  activeBasemap: "online",
+  tileErrorTimestamps: [],
+  cartoFallbackActive: false,
+
+  isOnline() {
+    return typeof navigator !== "undefined" && typeof navigator.onLine === "boolean"
+      ? navigator.onLine
+      : true;
+  },
+
+  shouldUseOfflineBasemap() {
+    if (this.mode === "offline") return true;
+    if (this.mode === "online") return false;
+    return !this.isOnline() || this.cartoFallbackActive;
+  },
+
+  update() {
+    const needOffline = this.shouldUseOfflineBasemap();
+    const targetBasemap = needOffline ? "offline" : "online";
+    this.activeBasemap = targetBasemap;
+
+    if (needOffline) {
+      if (typeof map.hasLayer === "function" && map.hasLayer(baseTileLayer)) map.removeLayer(baseTileLayer);
+      if (typeof map.hasLayer === "function" && map.hasLayer(contrastTileLayer)) map.removeLayer(contrastTileLayer);
+      if (offlineBasemap) {
+        offlineBasemap.setEnabled(true);
+        if (cityContext) {
+          offlineBasemap.setCityContext(cityContext);
+        }
+      }
+    } else {
+      if (offlineBasemap) offlineBasemap.setEnabled(false);
+      if (typeof map.hasLayer === "function") {
+        if (!map.hasLayer(baseTileLayer)) baseTileLayer.addTo(map);
+        if (!map.hasLayer(contrastTileLayer)) contrastTileLayer.addTo(map);
+      }
+    }
+    this._updateBannerBadge();
+  },
+
+  handleTileError() {
+    if (this.mode === "online" || this.activeBasemap === "offline") return;
+    const now = monotonicNow();
+    this.tileErrorTimestamps.push(now);
+    this.tileErrorTimestamps = this.tileErrorTimestamps.filter(t => now - t <= TILE_ERROR_WINDOW_MS);
+    if (this.tileErrorTimestamps.length >= TILE_ERROR_THRESHOLD) {
+      if (CONFIG.debug) {
+        console.warn(`CARTO Basemap nicht erreichbar (${this.tileErrorTimestamps.length} Fehler), aktiviere Offline-Vektorkarte Fallback.`);
+      }
+      this.cartoFallbackActive = true;
+      this.update();
+    }
+  },
+
+  resetCartoFallback() {
+    this.cartoFallbackActive = false;
+    this.tileErrorTimestamps = [];
+  },
+
+  setMode(newMode) {
+    if (!["auto", "online", "offline"].includes(newMode)) return;
+    this.mode = newMode;
+    if (newMode === "online") {
+      this.resetCartoFallback();
+    }
+    this.update();
+  },
+
+  _updateBannerBadge() {
+    const badge = els.offlineBasemapBadge || (typeof document !== "undefined" ? document.getElementById("offlineBasemapBadge") : null);
+    if (badge) {
+      if (this.activeBasemap === "offline") {
+        badge.classList.remove("hidden");
+      } else {
+        badge.classList.add("hidden");
+      }
+    }
+  }
+};
+
+if (typeof baseTileLayer.on === "function") {
+  baseTileLayer.on("tileerror", () => basemapCoordinator.handleTileError());
+}
+if (typeof contrastTileLayer.on === "function") {
+  contrastTileLayer.on("tileerror", () => basemapCoordinator.handleTileError());
+}
+
+if (!basemapCoordinator.shouldUseOfflineBasemap()) {
+  baseTileLayer.addTo(map);
+  contrastTileLayer.addTo(map);
+} else {
+  basemapCoordinator.update();
+}
 
 const solutionLayers = L.featureGroup().addTo(map);
 const answerLayers = L.featureGroup().addTo(map);
@@ -312,6 +432,7 @@ function renderFireStations() {
 function getPoiCategoryLabel(categoryId, suppliedCategories = []) {
   const supplied = suppliedCategories.find(category => category.id === categoryId);
   if (supplied?.label) return supplied.label;
+  if (poiCategoriesApi && poiCategoriesApi.getLabel(categoryId)) return poiCategoriesApi.getLabel(categoryId);
   if (POI_CATEGORY_LABELS[categoryId]) return POI_CATEGORY_LABELS[categoryId];
   return String(categoryId || "Ort")
     .replace(/[_-]+/g, " ")
@@ -389,7 +510,10 @@ function buildCityContext(cityData, diagnostics = null) {
   if (!cityData || !Array.isArray(cityData.streets) || !Array.isArray(cityData.pois)) {
     throw new Error("Das lokale Stadtpaket ist unvollständig.");
   }
-  const metadata = normalizeCityMetadata(cityData.city);
+  const metadata = normalizeCityMetadata({
+    ...cityData.city,
+    boundary: cityData.city?.boundary || cityData.boundary || null
+  });
   const leafletBounds = createLeafletBounds(metadata);
   const centerLat = Number(metadata.center?.lat);
   const centerLon = Number(metadata.center?.lon);
@@ -422,6 +546,16 @@ function buildCityContext(cityData, diagnostics = null) {
     id,
     label: getPoiCategoryLabel(id, suppliedCategories)
   }));
+  if (poiCategoriesApi) {
+    categories.sort((a, b) => {
+      const defA = poiCategoriesApi.getById(a.id);
+      const defB = poiCategoriesApi.getById(b.id);
+      const orderA = defA ? defA.order : 999;
+      const orderB = defB ? defB.order : 999;
+      if (orderA !== orderB) return orderA - orderB;
+      return a.label.localeCompare(b.label, "de");
+    });
+  }
   const targetStartedAt = monotonicNow();
   const streetTargets = targetApi.prepareStreetTargets(cityData.streets, geometryApi);
   const poiTargets = targetApi.preparePoiTargets(cityData.pois, categories);
@@ -652,6 +786,9 @@ function applyCityContext(
   const markerStartedAt = monotonicNow();
   renderFireStations();
   recordRuntimeTiming(diagnostics, "fireStationMarkersMs", markerStartedAt);
+  if (offlineBasemap) {
+    offlineBasemap.setCityContext(nextContext);
+  }
   renderTrainingAreaSelect(nextContext);
   renderStatistics();
   const statisticsLoadWarning = statisticsStore.getLoadWarning();
@@ -774,6 +911,9 @@ function activateTrainingArea(areaId, options = {}) {
   contentRepository.poiTargets = cityContext.poiTargets;
 
   renderFireStations();
+  if (offlineBasemap) {
+    offlineBasemap.setTrainingArea(cityContext.activeArea);
+  }
 
   if (cityContext.leafletBounds && map) {
     map.setMaxBounds(cityContext.leafletBounds.pad ? cityContext.leafletBounds.pad(CONFIG.maxBoundsPadding) : null);
@@ -783,6 +923,7 @@ function activateTrainingArea(areaId, options = {}) {
   if (els.trainingAreaSelect) {
     els.trainingAreaSelect.value = cityContext.activeAreaId || "";
   }
+  renderPoiCategoryOptions();
 
   if (gameState.config.mode === "free") {
     renderIdleGame();
@@ -1012,12 +1153,25 @@ function saveContentSettings() {
 
 function renderPoiCategoryOptions() {
   const selected = new Set(contentSettings.poiCategories);
-  els.poiCategoryOptions.innerHTML = poiCategories.map(category => `
-    <label class="category-option">
+  const targets = contentRepository?.poiTargets || cityContext?.poiTargets || [];
+  const counts = new Map();
+  for (const target of targets) {
+    if (target && target.active && target.quizEligible && target.category) {
+      counts.set(target.category, (counts.get(target.category) || 0) + 1);
+    }
+  }
+
+  els.poiCategoryOptions.innerHTML = poiCategories.map(category => {
+    const count = counts.get(category.id) || 0;
+    const isChecked = selected.has(category.id);
+    const isDisabled = targets.length > 0 && count === 0;
+    return `
+    <label class="category-option${isDisabled ? " disabled" : ""}">
       <input type="checkbox" data-poi-category="${escapeHtml(category.id)}"
-        ${selected.has(category.id) ? "checked" : ""} />
-      <span>${escapeHtml(category.label)}</span>
-    </label>`).join("");
+        ${isChecked ? "checked" : ""} ${isDisabled ? "disabled" : ""} />
+      <span>${escapeHtml(category.label)}${targets.length > 0 ? ` (${count})` : ""}</span>
+    </label>`;
+  }).join("");
 }
 
 function applyContentSettingsToControls() {
@@ -1192,6 +1346,11 @@ async function startRound() {
   if (isCountdownMode()
     && gameState.results.length >= gameState.config.totalRounds) {
     finishGame();
+    return;
+  }
+  if (getConfiguredTargetCount() === 0) {
+    gameEngine.cancelRound();
+    renderRoundPreparationError();
     return;
   }
   cancelAutoAdvance();
@@ -2393,15 +2552,20 @@ window.addEventListener("keydown", event => {
 });
 
 function updateOnlineStatus() {
-  if (!els.offlineBanner) return;
   const isOnline = typeof navigator !== "undefined" && typeof navigator.onLine === "boolean"
     ? navigator.onLine
     : true;
-  if (!isOnline) {
-    els.offlineBanner.classList.remove("hidden");
-  } else {
-    els.offlineBanner.classList.add("hidden");
+  if (els.offlineBanner) {
+    if (!isOnline) {
+      els.offlineBanner.classList.remove("hidden");
+    } else {
+      els.offlineBanner.classList.add("hidden");
+    }
   }
+  if (isOnline) {
+    basemapCoordinator.resetCartoFallback();
+  }
+  basemapCoordinator.update();
 }
 if (typeof window !== "undefined" && typeof window.addEventListener === "function") {
   window.addEventListener("online", updateOnlineStatus);
@@ -2428,5 +2592,10 @@ window.StrassentrainerRuntime = Object.freeze({
   getStatus: () => ({ status: runtimeState.status, error: runtimeState.error }),
   activateTrainingArea,
   getActiveTrainingArea: () => cityContext?.activeArea || null,
-  getTrainingAreas: () => (cityContext?.areas ? [...cityContext.areas] : [])
+  getTrainingAreas: () => (cityContext?.areas ? [...cityContext.areas] : []),
+  useOfflineBasemap: (force = true) => basemapCoordinator.setMode(force ? "offline" : "auto"),
+  setBasemapMode: mode => basemapCoordinator.setMode(mode),
+  getBasemapMode: () => basemapCoordinator.mode,
+  getActiveBasemap: () => basemapCoordinator.activeBasemap,
+  getOfflineBasemapDiagnostics: () => (offlineBasemap ? offlineBasemap.getDiagnostics() : null)
 });

@@ -48,7 +48,11 @@
     return normalized || "stadt";
   }
 
-  function cityPackageFilename(city, schemaVersion = SCHEMA_VERSION) {
+  function cityPackageFilename(city, schemaVersion = SCHEMA_VERSION, packageMeta = null) {
+    const pkg = packageMeta || city?.package;
+    if (pkg?.type === "curated" && pkg?.version) {
+      return `${slugifyCityName(displayName(city))}-training-v${pkg.version}.json`;
+    }
     const version = Number.isInteger(schemaVersion) ? schemaVersion : SCHEMA_VERSION;
     return `${slugifyCityName(displayName(city))}-strassentrainer-v${version}.json`;
   }
@@ -63,7 +67,7 @@
 
   function validationIssues(result, kind = "errors") {
     if (!result?.validation) return [];
-    return ["municipality", "streets", "pois", "areas"].flatMap(sectionName => {
+    return ["package", "municipality", "streets", "pois", "areas"].flatMap(sectionName => {
       const issues = result.validation[sectionName]?.[kind];
       return Array.isArray(issues) ? issues : [];
     });
@@ -71,6 +75,21 @@
 
   function validationErrorMessage(result) {
     const codes = new Set(validationIssues(result).map(entry => entry.code));
+    if (codes.has("PACKAGE_HASH_MISMATCH")) {
+      return "Die Prüfsumme des Stadtpakets stimmt nicht mit dem Inhalt überein. Die Datei ist möglicherweise beschädigt.";
+    }
+    if (codes.has("PACKAGE_VERSION_INVALID")) {
+      return "Die kuratierte Paketversion ist ungültig (erwartet: MAJOR.MINOR.PATCH).";
+    }
+    if (codes.has("PACKAGE_ID_INVALID") || codes.has("PACKAGE_TYPE_INVALID")) {
+      return "Die Paketidentität oder der Pakettyp ist ungültig.";
+    }
+    if (codes.has("PACKAGE_MAINTAINER_MISSING") || codes.has("PACKAGE_VERIFICATION_INVALID")) {
+      return "Die Prüfmetadaten des Pakets sind unvollständig oder ungültig.";
+    }
+    if (codes.has("PACKAGE_TITLE_INVALID")) {
+      return "Der Pakettitel ist ungültig oder fehlt.";
+    }
     if (codes.has("CITY_PACKAGE_SCHEMA_NEWER")) {
       return "Diese Stadtdatei verwendet eine neuere, derzeit nicht unterstützte Version.";
     }
@@ -109,6 +128,29 @@
     }
 
     const hasAreas = Array.isArray(areas) && areas.length > 0;
+    let pkg = null;
+    if (packageOptions.package && typeof packageOptions.package === "object") {
+      pkg = JSON.parse(JSON.stringify(packageOptions.package));
+    } else if (city?.package && typeof city.package === "object") {
+      pkg = JSON.parse(JSON.stringify(city.package));
+    } else if (city?.id === "osm-relation-1016396" && (city?.source?.includes("curated") || !city?.source)) {
+      pkg = {
+        id: "de-oberasbach-fire-training",
+        type: "curated",
+        version: "1.0.0",
+        title: "Oberasbach – geprüftes Trainingspaket",
+        createdAt: "2026-08-28T00:00:00.000Z",
+        updatedAt: "2026-09-05T00:00:00.000Z",
+        source: "curated",
+        verification: {
+          status: "verified",
+          verifiedAt: "2026-09-05T00:00:00.000Z",
+          maintainer: "Straßentrainer",
+          note: "Straßen und relevante Einrichtungen redaktionell geprüft"
+        }
+      };
+    }
+
     const candidate = {
       schemaVersion: SCHEMA_VERSION,
       exportedAt: isoTimestamp(packageOptions.exportedAt),
@@ -119,6 +161,16 @@
     if (hasAreas) {
       candidate.areas = areas;
     }
+    if (pkg) {
+      candidate.package = pkg;
+      if (pkg.type === "curated") {
+        const val = requireValidator();
+        if (typeof val.computePackageHash === "function") {
+          pkg.contentHash = val.computePackageHash(candidate);
+        }
+      }
+    }
+
     const validated = requireValidator().validateCityPackage(candidate);
     if (!validated.valid) {
       throw new CityPackageError("EXPORT_DATA_INVALID", validationErrorMessage(validated));
@@ -132,6 +184,9 @@
     };
     if (hasAreas) {
       result.areas = validated.areas || [];
+    }
+    if (validated.package && !validated.package.legacy) {
+      result.package = validated.package;
     }
     return result;
   }
@@ -165,10 +220,13 @@
     if (!city) {
       throw new CityPackageError("CITY_NOT_FOUND", "Die ausgewählte Stadt wurde lokal nicht gefunden.");
     }
-    const packageData = createCityPackage(city, streets, pois, areas, { exportedAt: options.exportedAt });
+    const packageData = createCityPackage(city, streets, pois, areas, {
+      exportedAt: options.exportedAt,
+      package: options.package || city.package
+    });
     return {
       packageData,
-      filename: cityPackageFilename(city, packageData.schemaVersion),
+      filename: cityPackageFilename(city, packageData.schemaVersion, packageData.package),
       json: `${JSON.stringify(packageData, null, 2)}\n`
     };
   }
@@ -259,6 +317,22 @@
     return parseCityPackageText(text, { maxFileSizeBytes: maximum });
   }
 
+  function comparePackageVersions(a, b) {
+    return requireValidator().comparePackageVersions(a, b);
+  }
+
+  function computePackageHash(packageData) {
+    return requireValidator().computePackageHash(packageData);
+  }
+
+  function verifyPackageHash(packageData) {
+    return requireValidator().verifyPackageHash(packageData);
+  }
+
+  function parseSemver(versionString) {
+    return requireValidator().parseSemver(versionString);
+  }
+
   return Object.freeze({
     SCHEMA_VERSION,
     MAX_IMPORT_FILE_SIZE_BYTES,
@@ -272,6 +346,10 @@
     downloadExportedCity,
     exportAndDownloadCityPackage,
     parseCityPackageText,
-    readCityPackageFile
+    readCityPackageFile,
+    comparePackageVersions,
+    computePackageHash,
+    verifyPackageHash,
+    parseSemver
   });
 });
