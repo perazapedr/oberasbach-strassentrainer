@@ -200,8 +200,13 @@
     const candidateStreets = Array.isArray(candidateData.streets) ? candidateData.streets : [];
     const currentPois = Array.isArray(currentData.pois) ? currentData.pois : [];
     const candidatePois = Array.isArray(candidateData.pois) ? candidateData.pois : [];
-    const currentAreas = Array.isArray(currentData.areas) ? currentData.areas : [];
-    const candidateAreas = Array.isArray(candidateData.areas) ? candidateData.areas : [];
+    // Lokale Benutzergebiete gehören nicht zum fachlichen Paket-Diff.
+    const currentAreas = Array.isArray(currentData.areas)
+      ? currentData.areas.filter(area => !area || area.source !== "user")
+      : [];
+    const candidateAreas = Array.isArray(candidateData.areas)
+      ? candidateData.areas.filter(area => !area || area.source !== "user")
+      : [];
 
     // 1. Street comparison
     const currentStreetMap = new Map();

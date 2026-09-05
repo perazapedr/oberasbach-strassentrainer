@@ -1,9 +1,9 @@
 /**
  * Straßentrainer - Service Worker
- * Phase 14.3: Kuratierte Stadtpakete
+ * Phase 14.4a: Karteneditor-/Overpass-Stabilisierung
  */
 
-const STATIC_CACHE = "strassentrainer-static-v5";
+const STATIC_CACHE = "strassentrainer-static-v9";
 
 const STATIC_ASSETS = [
   "./",
@@ -18,6 +18,7 @@ const STATIC_ASSETS = [
   "timer.js",
   "city-storage.js",
   "city-data-validator.js",
+  "custom-training-area.js",
   "city-package.js",
   "city-update.js",
   "city-manager-ui.js",
@@ -66,11 +67,9 @@ function classifyRequest(request) {
 if (typeof self !== "undefined" && "addEventListener" in self && typeof ServiceWorkerGlobalScope !== "undefined") {
   self.addEventListener("install", (event) => {
     event.waitUntil(
-      caches.open(STATIC_CACHE).then((cache) => {
-        return cache.addAll(STATIC_ASSETS);
-      }).catch((err) => {
-        console.error("Service Worker install failed:", err);
-      })
+      caches.open(STATIC_CACHE)
+        .then((cache) => cache.addAll(STATIC_ASSETS))
+        .then(() => self.skipWaiting())
     );
   });
 
@@ -147,4 +146,3 @@ if (typeof module === "object" && module.exports) {
     classifyRequest
   };
 }
-

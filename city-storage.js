@@ -133,6 +133,15 @@
       if (typeof area.name !== "string" || area.name.trim().length === 0) {
         throw new Error(`Gebiet "${area.id}" besitzt keinen gültigen Namen.`);
       }
+      if (area.kind !== undefined && !["administrative", "response_area", "custom"].includes(area.kind)) {
+        throw new Error(`Gebiet "${area.id}" besitzt keinen gültigen Typ.`);
+      }
+      if (area.source !== undefined && !["osm", "curated", "user"].includes(area.source)) {
+        throw new Error(`Gebiet "${area.id}" besitzt keine gültige Quelle.`);
+      }
+      if (area.source === "user" && !["response_area", "custom"].includes(area.kind)) {
+        throw new Error(`Benutzergebiet "${area.id}" benötigt den Typ custom oder response_area.`);
+      }
     }
   }
 
@@ -258,12 +267,19 @@
         saveOptions = areasOrOptions;
       }
 
+      const db = await openDatabase();
       validateCity(city);
       validateStreets(streets, city.id);
       validatePois(pois, city.id);
+      if (saveOptions.preserveUserAreas !== false && db.objectStoreNames.contains(STORE_AREAS)) {
+        const existingAreas = await getCityAreas(city.id);
+        const incomingIds = new Set(areas.map(area => area && area.id).filter(Boolean));
+        const retainedUserAreas = existingAreas.filter(area => area && area.source === "user"
+          && !incomingIds.has(area.id));
+        areas = [...areas, ...retainedUserAreas];
+      }
       validateAreas(areas, city.id);
 
-      const db = await openDatabase();
       const hasAreas = db.objectStoreNames.contains(STORE_AREAS);
       const storeNames = hasAreas
         ? [STORE_CITIES, STORE_STREETS, STORE_POIS, STORE_AREAS]
@@ -381,6 +397,47 @@
         const nameB = String(second.displayName || second.name || "");
         return nameA.localeCompare(nameB, "de", { sensitivity: "base" });
       });
+    }
+
+    async function saveArea(area) {
+      if (!area || typeof area !== "object" || Array.isArray(area)) {
+        throw new Error("Gebiet muss ein gültiges Objekt sein.");
+      }
+      validateAreas([area], area.cityId);
+      const db = await openDatabase();
+      if (!db.objectStoreNames.contains(STORE_AREAS)) {
+        throw new Error("Der Gebiets-Speicher ist nicht verfügbar.");
+      }
+      const cityTx = db.transaction(STORE_CITIES, "readonly");
+      const cityTxPromise = transactionToPromise(cityTx);
+      const city = await requestToPromise(cityTx.objectStore(STORE_CITIES).get(area.cityId));
+      await cityTxPromise;
+      if (!city) throw new Error(`Stadt mit ID "${area.cityId}" existiert nicht in der Datenbank.`);
+      const tx = db.transaction(STORE_AREAS, "readwrite");
+      const txPromise = transactionToPromise(tx);
+      tx.objectStore(STORE_AREAS).put(area);
+      await txPromise;
+      return area;
+    }
+
+    async function deleteArea(areaId, options = {}) {
+      const normalizedId = String(areaId || "").trim();
+      if (!normalizedId) return false;
+      const db = await openDatabase();
+      if (!db.objectStoreNames.contains(STORE_AREAS)) return false;
+      const readTx = db.transaction(STORE_AREAS, "readonly");
+      const readPromise = transactionToPromise(readTx);
+      const area = await requestToPromise(readTx.objectStore(STORE_AREAS).get(normalizedId));
+      await readPromise;
+      if (!area) return false;
+      if (options.userOnly !== false && area.source !== "user") {
+        throw new Error("Nur selbst erstellte Trainingsgebiete können gelöscht werden.");
+      }
+      const tx = db.transaction(STORE_AREAS, "readwrite");
+      const txPromise = transactionToPromise(tx);
+      tx.objectStore(STORE_AREAS).delete(normalizedId);
+      await txPromise;
+      return true;
     }
 
     async function getCityData(cityId, options = {}) {
@@ -598,6 +655,8 @@
       getCityStreets,
       getCityPois,
       getCityAreas,
+      saveArea,
+      deleteArea,
       getCityData,
       hasCity,
       getActiveCityId,
@@ -630,6 +689,8 @@
     getCityStreets: defaultInstance.getCityStreets,
     getCityPois: defaultInstance.getCityPois,
     getCityAreas: defaultInstance.getCityAreas,
+    saveArea: defaultInstance.saveArea,
+    deleteArea: defaultInstance.deleteArea,
     getCityData: defaultInstance.getCityData,
     hasCity: defaultInstance.hasCity,
     getActiveCityId: defaultInstance.getActiveCityId,

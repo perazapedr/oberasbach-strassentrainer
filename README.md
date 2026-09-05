@@ -379,6 +379,12 @@ Alle Dateipfade sind relativ aufgebaut und funktionieren deshalb auch in einem P
 
 ## Kartenarchitektur & Offline-Betrieb
 
+### Lokale Trainingsgebiete
+
+Eigene freie Regionen und Feuerwehr-Einsatzgebiete sind lokale Benutzerkonfigurationen im bestehenden `areas`-Store. Sie filtern ausschließlich die bereits installierten Straßen und POIs, werden nicht in Stadtpakete oder deren Hash aufgenommen und bleiben bei Paketupdates erhalten. Eine durch eine neue Gemeindegrenze unzulässig gewordene Region wird als nicht verfügbar markiert, aber weder gelöscht noch geometrisch beschnitten.
+
+Für Phase 14.4b muss die derzeitige Annahme „installierter Datensatz = genau eine Gemeindegrenze“ erweitert werden: Ein künftiges District-Dataset braucht eine eigene paketweite Coverage-Grenze und mehrere enthaltene Gemeinden. Die TrainingArea-Filter- und Cache-Schnittstelle kann dabei unverändert auf der größeren lokalen Coverage arbeiten.
+
 - **Online**: Gewohntes, detailreiches Kartenbild über den beschriftungsfreien CARTO-Kachelstil (`_nolabels`).
 - **Offline**: Autarke lokale Orientierungskarte über einen performanten Canvas-Vektorlayer (`offline-basemap.js`), der die in IndexedDB gespeicherten Straßengeometrien und Gemeindegrenzen ohne externe Kacheln und ohne Netzwerkzugriff rendert. Bei Netzausfall oder Kachelfehlern schaltet die Anwendung automatisch auf die lokale Vektor-Basiskarte um.
 

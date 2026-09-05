@@ -120,7 +120,9 @@
     let areas = [];
     let packageOptions = options;
     if (Array.isArray(areasOrOptions)) {
-      areas = areasOrOptions;
+      // Persönliche Gebiete sind lokale Konfiguration und niemals Bestandteil
+      // eines exportierten bzw. gehashten Stadtpakets.
+      areas = areasOrOptions.filter(area => area && area.source !== "user");
       packageOptions = options || {};
     } else if (areasOrOptions && typeof areasOrOptions === "object") {
       areas = [];

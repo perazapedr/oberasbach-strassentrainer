@@ -93,6 +93,7 @@ test("4. Service Worker definiert saubere Cache-Version und alle App-Shell-Datei
   const sw = require("../sw.js");
 
   assert.ok(sw.STATIC_CACHE.startsWith("strassentrainer-static-"), "Cache-Name muss strassentrainer-static- Präfix tragen");
+  assert.equal(sw.STATIC_CACHE, "strassentrainer-static-v9");
   assert.ok(Array.isArray(sw.STATIC_ASSETS), "STATIC_ASSETS muss ein Array sein");
   assert.ok(sw.STATIC_ASSETS.length >= 20, "STATIC_ASSETS muss alle Kern-Dateien umfassen");
 
@@ -122,6 +123,18 @@ test("4. Service Worker definiert saubere Cache-Version und alle App-Shell-Datei
   for (const exp of expected) {
     assert.ok(sw.STATIC_ASSETS.includes(exp), `App-Shell muss ${exp} enthalten`);
   }
+});
+
+test("4b. Service-Worker-Update aktiviert die neue vollständige App-Shell ohne manuellen Hard Reload", () => {
+  const source = fs.readFileSync(path.join(ROOT, "sw.js"), "utf8");
+  const appSource = fs.readFileSync(path.join(ROOT, "app.js"), "utf8");
+  assert.match(source, /cache\.addAll\(STATIC_ASSETS\)/);
+  assert.match(source, /self\.skipWaiting\(\)/);
+  assert.match(source, /key\.startsWith\("strassentrainer-static-"\)/);
+  assert.match(source, /self\.clients\.claim\(\)/);
+  assert.doesNotMatch(source, /indexedDB|Clear-Site-Data/);
+  assert.match(appSource, /serviceWorker\.addEventListener\("controllerchange"/);
+  assert.match(appSource, /window\.location\.reload\(\)/);
 });
 
 // ---------------------------------------------------------------------------

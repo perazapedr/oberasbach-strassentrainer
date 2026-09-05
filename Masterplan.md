@@ -1,1924 +1,1511 @@
-# Entwicklungsplan: Vom Oberasbach-Straßentrainer zum universellen Gemeinde-Trainer
+# Masterplan 2.0 – Straßentrainer Deutschland
 
-## 1. Zielbild
+> **OpenStreetMap bleibt die Datenquelle, aber Overpass verschwindet aus dem produktiven Datenpfad.**
 
-Der bestehende **Oberasbach-Straßentrainer** soll so erweitert werden, dass nicht mehr nur ein fest hinterlegter Ort spielbar ist, sondern grundsätzlich **jede geeignete deutsche Stadt oder Gemeinde**.
+Das ist kein Neubau des Straßentrainers. Die vorhandene Architektur wird weiterverwendet; geändert wird vor allem, **wie neue Stadt-/Gebietsdaten entstehen und zur Anwendung gelangen**. Das entspricht auch dem bisherigen Grundsatz, Game Engine, Timer, Punkteberechnung und grundlegende Statistik beim Datenumbau möglichst unangetastet zu lassen.
 
-Das gewünschte Grundprinzip lautet:
-
-```text
-Stadt suchen
-    ↓
-Nominatim identifiziert die Gemeinde
-    ↓
-Overpass lädt einmalig Straßen + POIs + Geometrien
-    ↓
-OSM-Daten werden validiert und normalisiert
-    ↓
-Daten werden lokal in IndexedDB gespeichert
-    ↓
-Stadt ist installiert
-    ↓
-Spiel läuft ausschließlich mit lokalen Daten
-```
-
-Damit bleibt die Anwendung:
-
-- vollständig browserbasiert
-- ohne eigenen Backend-Server
-- weiterhin für statisches Hosting wie GitHub Pages geeignet
-- nach Installation einer Stadt weitgehend unabhängig von externen APIs
-- für mehrere Städte nutzbar
-- deutlich schneller bei der Auflösung von Straßen
-- langfristig auch offlinefähig
-
-Oberasbach wird dabei nicht entfernt, sondern zur **ersten bzw. mitgelieferten Stadt des neuen Systems**.
+**Stand:** September 2026
+**Strategische Änderung:** OSM-Nutzung ohne produktive Overpass-Abhängigkeit
 
 ---
 
-# 2. Ausgangslage des bestehenden Projekts
+# 1. Zielbild
 
-Der aktuelle Stand ist bereits eine gute Grundlage für die Erweiterung.
+Aus dem ursprünglichen Oberasbach-Straßentrainer soll ein **allgemeiner, zuverlässiger, offlinefähiger Straßentrainer für deutsche Gemeinden, Städte und später Landkreise bzw. Feuerwehr-Einsatzgebiete** werden.
 
-Vorhanden sind insbesondere:
+Ein Nutzer soll perspektivisch:
 
 ```text
-app.js
-game-engine.js
-geometry.js
-targets.js
-statistics.js
-timer.js
-
-data/
-├── oberasbach-streets.js
-└── oberasbach-pois.js
-
-tests/
-├── free-mode-integration-tests.js
-├── game-engine-tests.js
-├── geometry-tests.js
-├── statistics-tests.js
-├── targets-tests.js
-└── timer-tests.js
+Straßentrainer öffnen
+        ↓
+Ort / Landkreis suchen
+        ↓
+verfügbares Dataset auswählen
+        ↓
+fertiges Datenpaket herunterladen
+        ↓
+Validierung
+        ↓
+IndexedDB
+        ↓
+Gebiet ist installiert
+        ↓
+komplett lokales Training
 ```
 
-Die Tests des aktuellen Projektstands laufen erfolgreich.
+können.
 
-Das ist wichtig, weil wir dadurch nicht gleichzeitig das Spielprinzip umbauen müssen.
+Während einer Spielrunde finden **keine OSM-, Overpass-, Nominatim- oder sonstigen Geodatenabfragen** statt.
 
-Bereits sauber getrennt sind:
+Dieses lokale Spielprinzip war bereits Kern des bisherigen Masterplans: Nach der Installation sollten Straßen, POIs und Geometrien lokal vorliegen und von dort während der Spielsitzung verwendet werden.
 
-- Game-Engine
+---
+
+# 2. Neue zentrale Architektur
+
+## Bisher
+
+```text
+Browser
+  │
+  ├── Nominatim
+  │
+  └── Overpass
+        │
+        ▼
+Straßen / POIs / Grenze
+        │
+        ▼
+Validator
+        │
+        ▼
+IndexedDB
+        │
+        ▼
+Spiel
+```
+
+## Ziel
+
+```text
+                    OpenStreetMap
+                         │
+                         ▼
+                 regionale OSM-PBFs
+                         │
+                         ▼
+                 Dataset Builder
+                 außerhalb Browser
+                         │
+           ┌─────────────┼─────────────┐
+           ▼             ▼             ▼
+         Städte       Gemeinden     Landkreise
+           │             │             │
+           └─────────────┬─────────────┘
+                         ▼
+               Straßentrainer Package
+                         │
+                         ▼
+                Dataset Repository/CDN
+                         │
+                         ▼
+                      Browser
+                         │
+                         ▼
+                     Validator
+                         │
+                         ▼
+                     IndexedDB
+                         │
+                         ▼
+                 vollständig lokales
+                       Training
+```
+
+Der entscheidende Architekturpunkt lautet:
+
+> **Der Browser verarbeitet keine großen OSM-Rohdaten.**
+
+Die aufwendige Verarbeitung passiert einmal zentral oder automatisiert.
+
+---
+
+# 3. Was weiterhin erhalten bleibt
+
+Der Architekturwechsel soll ausdrücklich **nicht** bedeuten, dass wir die bisherige Arbeit wegwerfen.
+
+Weiterverwendet werden insbesondere:
+
+- IndexedDB
+- `cities`
+- `streets`
+- `pois`
+- `areas`
+- CityContext
+- Geometrie-Engine
+- Targets
+- Game Engine
 - Timer
-- Zielauswertung
-- Geometrieberechnung
 - Punkteberechnung
 - Statistik
-- POI-Auswertung
+- Stadtwechsel
+- TrainingAreas
+- lokale Offlinekarte
+- Service Worker
+- Package-Import/Export
+- Package-Versionen
+- `contentHash`
+- Update-Diff
+- POI-Registry
+- kuratiertes Oberasbach-Paket
+- bestehende Tests
 
-Der größte Umbau betrifft daher:
-
-1. Datenhaltung
-2. Datenbeschaffung
-3. Datenvalidierung
-4. aktive Stadt
-5. Kartenkonfiguration
-6. Stadtverwaltung
-7. Statistikzuordnung
-
----
-
-# 3. Zentrale Architekturentscheidung
-
-## Bestehende JavaScript-Architektur zunächst beibehalten
-
-Der aktuelle Trainer verwendet globale APIs wie:
-
-```javascript
-window.StreetGeometry
-window.StrassentrainerTargets
-window.StrassentrainerStatistics
-window.StrassentrainerEngine
-```
-
-Nicht gleichzeitig mit der Multi-Stadt-Umstellung das komplette Projekt auf `import`/`export` umstellen.
-
-Neue Dateien wie
-
-```text
-city-storage.js
-osm-service.js
-city-data-validator.js
-city-manager-ui.js
-```
-
-sollen zunächst zum bestehenden Stil passen.
-
-Beispielsweise:
-
-```javascript
-window.StrassentrainerCityStorage = ...
-window.StrassentrainerOsmService = ...
-window.StrassentrainerCityDataValidator = ...
-window.StrassentrainerCityManager = ...
-```
-
-Eine spätere Umstellung auf ES-Module kann separat erfolgen.
+Der bisherige Masterplan sah ohnehin vor, hauptsächlich die Datenzuführung dynamisch zu machen, während das eigentliche Spiel weitgehend unverändert bleibt.
 
 ---
 
-# 4. Zukünftige Gesamtarchitektur
+# 4. Was langfristig ersetzt wird
+
+Diese Komponenten verlieren ihre zentrale Rolle:
 
 ```text
-                     ┌─────────────────┐
-                     │   Nominatim     │
-                     │  Gemeindesuche  │
-                     └────────┬────────┘
-                              │
-                              ▼
-                     Gemeinde auswählen
-                              │
-                              ▼
-                     ┌─────────────────┐
-                     │    Overpass     │
-                     │ Straßen + POIs  │
-                     └────────┬────────┘
-                              │
-                              ▼
-                    ┌───────────────────┐
-                    │ Datenvalidierung │
-                    │                   │
-                    │ Gemeindegrenze   │
-                    │ Namen prüfen     │
-                    │ Duplikate        │
-                    │ Geometrien       │
-                    │ POIs plausibel   │
-                    └─────────┬─────────┘
-                              │
-                              ▼
-                    ┌───────────────────┐
-                    │ Normalisierung   │
-                    │                   │
-                    │ Straßen bündeln  │
-                    │ POIs vereinheitl.│
-                    └─────────┬─────────┘
-                              │
-                              ▼
-                       ┌─────────────┐
-                       │ IndexedDB   │
-                       │             │
-                       │ cities      │
-                       │ streets     │
-                       │ pois        │
-                       └──────┬──────┘
-                              │
-                              ▼
-                     ┌─────────────────┐
-                     │ Content Repo    │
-                     │ aktive Stadt    │
-                     └───────┬─────────┘
-                             │
-             ┌───────────────┼───────────────┐
-             ▼               ▼               ▼
-        Game Engine       Leaflet         Statistik
+Nominatim-Suche
+Overpass Boundary Download
+Overpass Straßen Download
+Overpass POI Download
+Overpass Chunking im Browser
+Overpass Retry
+Overpass Failover
+```
+
+Sie werden zunächst **nicht sofort gelöscht**.
+
+Die Migration erfolgt nach dem Prinzip:
+
+```text
+Neue Architektur bauen
+↓
+testen
+↓
+parallel mit alter Architektur vergleichen
+↓
+neue Architektur freigeben
+↓
+erst dann Overpass entfernen
+```
+
+Das verhindert einen Big-Bang-Umbau.
+
+---
+
+# 5. Datenqualitäts-Grundsatz
+
+OpenStreetMap bleibt die Ausgangsdatenquelle.
+
+Aber:
+
+> **OSM-Rohdaten werden niemals ungeprüft direkt als Trainingsdaten verwendet.**
+
+Der bisherige Masterplan formuliert bereits denselben Grundsatz: OSM liefert Ausgangsdaten, die Anwendung prüft und normalisiert sie, bevor daraus ein spielbares Paket entsteht.
+
+Die neue Pipeline wird deshalb:
+
+```text
+OSM
+↓
+extrahieren
+↓
+normalisieren
+↓
+deduplizieren
+↓
+klassifizieren
+↓
+validieren
+↓
+Paket erzeugen
+↓
+Hash erzeugen
+↓
+veröffentlichen
 ```
 
 ---
 
-# Phase 0 – Sicherung und technische Vorbereitung
+# 6. Status der bisherigen Entwicklung
 
-## Ziel
+## Phasen 0–10.5 – Multi-City-Grundsystem
 
-Den funktionierenden Oberasbach-Stand als Referenz erhalten.
+**Status: ✅ abgeschlossen**
 
-### Aufgaben
+Enthalten:
 
-- [ ] Git-Branch erstellen, z. B. `feature/multi-city`
-- [ ] aktuellen funktionierenden Stand committen
-- [ ] vorhandene Tests vollständig ausführen
-- [ ] App über lokalen HTTP-Server starten
-- [ ] Oberasbach als Referenz manuell testen
+- Ausgangszustand abgesichert
+- IndexedDB
+- Stadtverwaltung
+- dynamische CityContext-Struktur
+- Straßen
+- POIs
+- Validierung
+- Stadtwechsel
+- lokale Geometrien
+- getrennte Statistik
+- Oberasbach-Defaultpaket
+- Import/Export
+- Fehlerarchitektur
+- große Städte / Chunking
 
-Beispiel:
-
-```bash
-git checkout -b feature/multi-city
-python3 -m http.server 8000
-```
-
-Aufruf:
-
-```text
-http://localhost:8000
-```
-
-## Abschlusskriterium
-
-- [ ] Git-Branch vorhanden
-- [ ] aktueller Stand gesichert
-- [ ] alle bisherigen Tests erfolgreich
-- [ ] App läuft über HTTP
-- [ ] Oberasbach funktioniert unverändert
+Diese Arbeit bleibt vollständig relevant.
 
 ---
 
-# Phase 1 – Allgemeines Stadt-Datenmodell und IndexedDB
+# 7. Phase 11 – QA und reale Städte
 
-## Ziel
+**Status: ✅ abgeschlossen**
 
-Die Anwendung darf ihre Inhalte nicht mehr direkt aus festen Oberasbach-Dateien beziehen.
+Getestet wurden unterschiedliche Größenordnungen und reale OSM-Daten.
 
-Statt:
+Ziel war insbesondere sicherzustellen:
 
-```javascript
-window.OBERASBACH_STREETS
-window.OBERASBACH_POIS
-```
-
-soll eine allgemeine lokale Datenbank verwendet werden.
-
-## 1.1 Neue Datei `city-storage.js`
-
-Die Datei übernimmt die vollständige Persistenz heruntergeladener Städte.
-
-Vorgeschlagene Datenbank:
-
-```text
-strassentrainer-db
-```
-
-Version:
-
-```text
-1
-```
-
-Stores:
-
-```text
-cities
-streets
-pois
-```
-
-## 1.2 Store `cities`
-
-Beispiel:
-
-```javascript
-{
-  id: "osm-relation-123456",
-
-  name: "Oberasbach",
-  displayName: "Oberasbach",
-
-  district: "Landkreis Fürth",
-  state: "Bayern",
-  country: "Deutschland",
-
-  postalCodes: ["90522"],
-
-  osmType: "relation",
-  osmId: 123456,
-
-  bounds: {
-    south: 49.4017,
-    west: 10.9384,
-    north: 49.4454,
-    east: 10.9987
-  },
-
-  center: {
-    lat: 49.4356,
-    lon: 10.9694
-  },
-
-  defaultZoom: 13,
-
-  streetCount: 271,
-  poiCount: 60,
-
-  source: "openstreetmap",
-  dataVersion: 1,
-
-  createdAt: "...",
-  updatedAt: "..."
-}
-```
-
-## 1.3 Stadt-ID
-
-Nicht nur den Stadtnamen als ID verwenden.
-
-Bevorzugt:
-
-```text
-osm-relation-123456
-```
-
-oder langfristig ein stabiler amtlicher Gemeindeschlüssel, falls zuverlässig vorhanden.
-
-## 1.4 Store `streets`
-
-Ein Eintrag entspricht **einer spielbaren Straße**, nicht einem einzelnen OSM-Way.
-
-```javascript
-{
-  id: "osm-relation-123456:street:rothenburger-strasse",
-
-  cityId: "osm-relation-123456",
-
-  name: "Rothenburger Straße",
-
-  aliases: [
-    "Rothenburger Str."
-  ],
-
-  geometry: {
-    type: "MultiLineString",
-    coordinates: [...]
-  },
-
-  osmWayIds: [
-    123,
-    456,
-    789
-  ]
-}
-```
-
-Mehrere OSM-Ways mit demselben Straßennamen werden beim Import zusammengeführt.
-
-## 1.5 Store `pois`
-
-```javascript
-{
-  id: "osm-relation-123456:poi:node-987654",
-
-  cityId: "osm-relation-123456",
-
-  name: "Grundschule Beispielstadt",
-
-  category: "school",
-  categoryLabel: "Schule",
-
-  aliases: [],
-
-  position: {
-    lat: 49.123,
-    lon: 10.456
-  },
-
-  geometry: null,
-
-  osmType: "node",
-  osmId: 987654,
-
-  tags: {
-    amenity: "school"
-  }
-}
-```
-
-Bei Flächen:
-
-```javascript
-geometry: {
-  type: "Polygon",
-  coordinates: [...]
-}
-```
-
-## 1.6 Storage-Funktionen
-
-- [ ] `saveCity(city, streets, pois)`
-- [ ] `getAllCities()`
-- [ ] `getCity(cityId)`
-- [ ] `getCityStreets(cityId)`
-- [ ] `getCityPois(cityId)`
-- [ ] `deleteCity(cityId)`
-- [ ] `hasCity(cityId)`
-- [ ] `getActiveCityId()`
-- [ ] `setActiveCityId(cityId)`
-- [ ] `getActiveCity()`
-- [ ] `getActiveCityData()`
-- [ ] `updateCityMetadata()`
-- [ ] `clearDatabase()`
-
-## 1.7 Aktive Stadt
-
-Nur die aktive Stadt-ID kann in `localStorage` gespeichert werden:
-
-```text
-strassentrainer-active-city-v1
-```
-
-Die eigentlichen Daten bleiben in IndexedDB.
-
-## 1.8 Transaktionssicherheit
-
-Prinzip:
-
-```text
-Download
-   ↓
-Validierung
-   ↓
-IndexedDB schreiben
-   ↓
-erst danach Stadt als installiert behandeln
-```
-
-Keine halbfertigen Stadtpakete speichern.
-
-## 1.9 Tests
-
-Neue Datei:
-
-```text
-tests/city-storage-tests.js
-```
-
-Testfälle:
-
-- [ ] leere Datenbank
-- [ ] Stadt speichern
-- [ ] Stadt laden
-- [ ] mehrere Städte speichern
-- [ ] Straßen nach `cityId`
-- [ ] POIs nach `cityId`
-- [ ] aktive Stadt setzen
-- [ ] aktive Stadt wechseln
-- [ ] Stadt löschen
-- [ ] andere Städte bleiben erhalten
-- [ ] fehlerhafte Datensätze ablehnen
-
-## Abschlusskriterium
-
-```javascript
-await saveCity(cityA, streetsA, poisA);
-await saveCity(cityB, streetsB, poisB);
-
-await setActiveCityId(cityB.id);
-
-const active = await getActiveCity();
-```
-
-`active` muss Stadt B ergeben.
+- kleine Gemeinden funktionieren
+- mittlere Städte funktionieren
+- größere Städte funktionieren
+- MultiLineStrings
+- Datenmengen
+- Performance
+- Persistenz
 
 ---
 
-# Phase 2 – Nominatim-Gemeindesuche
+# 8. Phase 12 – Performance
 
-## Ziel
+**Status: ✅ abgeschlossen**
 
-Eine beliebige deutsche Gemeinde eindeutig identifizieren.
-
-Neue Datei:
-
-```text
-osm-service.js
-```
-
-## 2.1 Funktion
-
-```javascript
-searchMunicipalities(query)
-```
-
-Beispiel:
-
-```text
-Oberasbach
-```
-
-Ergebnis:
-
-```javascript
-[
-  {
-    name: "Oberasbach",
-    district: "Landkreis Fürth",
-    state: "Bayern",
-
-    osmType: "relation",
-    osmId: 123456,
-
-    bounds: {...},
-    center: {...}
-  }
-]
-```
-
-## 2.2 Ergebnisse filtern
-
-Nicht jedes Nominatim-Ergebnis ist eine Gemeinde.
-
-Prüfen:
-
-- [ ] `type`
-- [ ] `class`
-- [ ] `addresstype`
-- [ ] `osm_type`
-- [ ] `address`
-- [ ] Land = Deutschland
-- [ ] plausibler Verwaltungstyp
-
-## 2.3 Deutschland zunächst beschränken
-
-Version 1:
-
-```text
-countrycodes=de
-```
-
-## 2.4 Rate Limiting und Timeout
-
-- [ ] mindestens ca. 1 Sekunde zwischen Nominatim-Anfragen
-- [ ] `AbortController`
-- [ ] Timeout
-- [ ] verständliche Fehlermeldung
-
-## Abschlusskriterium
-
-```javascript
-const results =
-  await StrassentrainerOsmService.searchMunicipalities("Oberasbach");
-```
-
-liefert eine plausible Liste deutscher Gemeinden.
-
----
-
-# Phase 3 – Overpass-Downloader für Straßen, POIs und Geometrien
-
-## Ziel
-
-Nach Auswahl einer Gemeinde werden alle benötigten OSM-Daten einmalig heruntergeladen.
-
-## 3.1 Gemeindegrenze
-
-Die Bounding Box dient nur für:
-
-- Kartenansicht
-- Vorschau
-- `fitBounds()`
-
-Die eigentliche Datenabfrage soll über die reale administrative OSM-Grenze erfolgen.
-
-Prinzip:
-
-```text
-relation(OSM_ID)->.boundary;
-.boundary map_to_area -> .searchArea;
-```
-
-## 3.2 Funktion
-
-```javascript
-fetchCityData(municipality, options)
-```
-
-Ergebnis:
-
-```javascript
-{
-  city: {...},
-  streets: [...],
-  pois: [...],
-  validation: {...}
-}
-```
-
-## 3.3 Straßentypen Version 1
-
-Mindestens:
-
-```text
-residential
-living_street
-unclassified
-tertiary
-secondary
-primary
-```
-
-Optional:
-
-```text
-pedestrian
-```
-
-Später gesondert prüfen:
-
-```text
-service
-trunk
-motorway
-track
-```
-
-## 3.4 Nur benannte Straßen
-
-Straßen ohne `name` werden nicht als Spielziel übernommen.
-
-## 3.5 Namensfelder
-
-Berücksichtigen:
-
-```text
-name
-official_name
-alt_name
-short_name
-loc_name
-```
-
-Diese werden in `aliases` normalisiert.
-
-## 3.6 Straßen zusammenführen
-
-Beispiel:
-
-```text
-Hauptstraße
-Way 1
-
-Hauptstraße
-Way 2
-
-Hauptstraße
-Way 3
-```
-
-wird zu:
-
-```text
-Hauptstraße
-└── MultiLineString mit allen Abschnitten
-```
-
-Vorhandene Funktionen aus `geometry.js` wiederverwenden.
-
-## 3.7 POI-Kategorien Version 1
-
-Mindestens:
-
-```text
-amenity=fire_station
-amenity=school
-amenity=kindergarten
-shop=supermarket
-```
-
-Architektur aber direkt erweiterbar halten.
-
-Später mögliche Kategorien:
-
-```text
-hospital
-pharmacy
-fuel
-police
-townhall
-sports_centre
-hotel
-restaurant
-nursing_home
-company
-```
-
-## 3.8 Nodes, Ways und Relations
-
-POIs mit `nwr` suchen.
-
-Eine Schule kann sein:
-
-- Node
-- Way
-- Relation
-
-## 3.9 POI-Normalisierung
-
-Node:
-
-```javascript
-position: {...}
-geometry: null
-```
-
-Fläche:
-
-```javascript
-position: {...}
-geometry: {
-  type: "Polygon",
-  coordinates: [...]
-}
-```
-
-## 3.10 Fortschrittsmeldungen
-
-Beispiele:
-
-```text
-Gemeindegrenze gefunden …
-Straßendaten werden geladen …
-Straßen werden verarbeitet …
-POIs werden verarbeitet …
-271 Straßen gefunden
-42 Einrichtungen gefunden
-Download abgeschlossen
-```
-
-Technisch z. B.:
-
-```javascript
-onProgress({
-  stage: "processing-streets",
-  message: "Straßen werden verarbeitet …",
-  progress: 70
-});
-```
-
-## 3.11 Fehlerfälle
-
-- [ ] Nominatim nicht erreichbar
-- [ ] Overpass nicht erreichbar
-- [ ] HTTP 429
-- [ ] HTTP 504
-- [ ] Timeout
-- [ ] fehlerhaftes JSON
-- [ ] keine administrative Relation
-- [ ] Gemeinde ohne Straßen
-- [ ] extrem großer Datensatz
-
-## 3.12 Große Städte
-
-Version 1:
-
-```text
-eine Overpass-Abfrage
-```
-
-Späterer Fallback:
-
-```text
-1. Straßen
-2. POIs
-```
-
-oder räumliche Segmentierung.
-
----
-
-# Phase 4 – OSM-Datenvalidierung und Korrektheitsprüfung
-
-## Ziel
-
-OpenStreetMap wird als zentrale Datenquelle verwendet, aber die Daten werden **nicht blind übernommen**.
-
-Die Anwendung soll erkennen, wenn OSM-Daten fehlen, widersprüchlich oder ungewöhnlich sind.
-
-Neue Datei:
-
-```text
-city-data-validator.js
-```
-
-## 4.1 Grundprinzip
-
-```text
-Nominatim
-   ↓
-Gemeinde eindeutig bestimmen
-   ↓
-Overpass / OSM
-   ↓
-Straßen + POIs + Geometrien
-   ↓
-VALIDIERUNG
-   ├─ innerhalb Gemeindegrenze?
-   ├─ Name vorhanden?
-   ├─ doppelte Straßen?
-   ├─ plausible Geometrie?
-   ├─ POI-Kategorie plausibel?
-   ├─ Duplikate?
-   └─ ungewöhnliche Daten melden
-   ↓
-Normalisierung
-   ↓
-IndexedDB
-```
-
-## 4.2 Straßen validieren
-
-Für jede Straße prüfen:
-
-- [ ] Name vorhanden
-- [ ] Geometrie vorhanden
-- [ ] Koordinaten plausibel
-- [ ] wenigstens ein Straßenabschnitt innerhalb der Gemeinde
-- [ ] keine leere Geometrie
-- [ ] keine offensichtlichen Duplikate
-- [ ] gleiche Namen sinnvoll zusammengeführt
-- [ ] OSM-Way-IDs nachvollziehbar gespeichert
-
-## 4.3 Straßennamen normalisieren
-
-Für die Duplikaterkennung können Vergleichsnamen erzeugt werden.
-
-Beispiele:
-
-```text
-Straße / Str.
-Groß-/Kleinschreibung
-mehrfache Leerzeichen
-Unicode-Normalisierung
-```
-
-Wichtig:
-
-Der Originalname aus OSM bleibt erhalten.
-
-## 4.4 POIs validieren
-
-Prüfen:
-
-- [ ] Name vorhanden
-- [ ] passende Kategorie vorhanden
-- [ ] Position oder Geometrie vorhanden
-- [ ] liegt im Gemeindegebiet
-- [ ] keine doppelten OSM-Objekte
-- [ ] keine offensichtlichen Doppelmeldungen als Node und Fläche
-- [ ] OSM-ID und OSM-Typ vorhanden
-
-## 4.5 Gebäude und POI-Flächen
-
-Alle für das Spiel relevanten OSM-Gebäude bzw. Gelände sollen als Geometrie übernommen werden, wenn sie Teil eines ausgewählten POIs sind.
-
-Beispiel:
-
-```text
-amenity=school
-building=school
-```
-
-oder ein komplettes Schulgelände als Polygon.
-
-**Nicht zwingend** jedes beliebige Wohngebäude der Gemeinde herunterladen.
-
-Falls später Gebäudetraining benötigt wird, kann zusätzlich `building=*` geladen werden.
-
-## 4.6 Validierungsbericht
-
-Nach dem Download:
-
-```javascript
-{
-  valid: true,
-
-  streets: {
-    totalRaw: 420,
-    totalNormalized: 271,
-    duplicatesMerged: 149,
-    invalid: 0,
-    warnings: []
-  },
-
-  pois: {
-    totalRaw: 52,
-    totalNormalized: 47,
-    duplicatesMerged: 5,
-    invalid: 0,
-    warnings: []
-  }
-}
-```
-
-## 4.7 Warnungen anzeigen
-
-Beispiele:
-
-```text
-3 Straßen besitzen ungewöhnliche Geometrien.
-2 Einrichtungen wurden als mögliche Duplikate erkannt.
-1 POI besitzt keinen Namen und wurde nicht übernommen.
-```
-
-## 4.8 Oberasbach-Sonderfall: OSM-Abgleich mit kuratierten Daten
-
-Der bestehende Oberasbach-Datensatz ist manuell überprüft und soll nicht einfach überschrieben werden.
-
-Stattdessen:
-
-```text
-kuratierter Oberasbach-Datensatz
-              ↕
-         OSM-Abgleich
-```
-
-Mögliche Ergebnisse:
-
-```text
-Straße nur im bestehenden Datensatz
-Straße nur in OSM
-abweichender Straßenname
-POI nur im bestehenden Datensatz
-POI nur in OSM
-abweichende Adresse
-abweichende Position
-abweichende Kategorie
-```
-
-## 4.9 Abgleichsbericht Oberasbach
-
-Beispiel:
-
-```text
-OSM-Abgleich Oberasbach
-
-✓ 258 Straßen stimmen überein
-⚠ 4 Straßen nur in OSM
-⚠ 2 Straßen nur im lokalen Datensatz
-⚠ 3 Namensabweichungen
-
-✓ 51 POIs stimmen überein
-⚠ 5 neue OSM-POIs
-⚠ 2 Adressabweichungen
-```
-
-Die Anwendung soll **nicht automatisch entscheiden**, dass OSM immer richtig ist.
-
-Bei Konflikten zwischen kuratierten Daten und OSM bleibt eine manuelle Prüfung möglich.
-
-## Abschlusskriterium
-
-Keine Stadt wird gespeichert, bevor:
-
-- [ ] Pflichtfelder vorhanden sind
-- [ ] Geometrien plausibel sind
-- [ ] ungültige Objekte entfernt wurden
-- [ ] ein Validierungsbericht erzeugt wurde
-
----
-
-# Phase 5 – Stadtmanager und Benutzeroberfläche
-
-## Ziel
-
-Der Spieler kann Städte suchen, installieren, wechseln und löschen.
-
-Neue Datei:
-
-```text
-city-manager-ui.js
-```
-
-## 5.1 Stadtanzeige
-
-Beispiel:
-
-```text
-📍 Oberasbach ▾
-```
-
-Dropdown:
-
-```text
-Oberasbach        ✓
-Zirndorf
-Siegen
-────────────────
-+ Neue Stadt hinzufügen
-```
-
-## 5.2 Modal „Neue Stadt hinzufügen“
-
-```text
-┌────────────────────────────────────┐
-│ Neue Stadt hinzufügen              │
-│                                    │
-│ [ Oberasbach________________ ] 🔍  │
-│                                    │
-│ Suchergebnisse                     │
-│                                    │
-│ Oberasbach                         │
-│ Landkreis Fürth · Bayern           │
-│                                    │
-└────────────────────────────────────┘
-```
-
-## 5.3 Downloadbildschirm
-
-```text
-Oberasbach wird vorbereitet
-
-[██████████████░░░░] 72 %
-
-Straßen werden verarbeitet …
-
-Gefunden:
-245 Straßen
-18 POIs
-```
-
-## 5.4 Validierung sichtbar machen
-
-Nach dem Download:
-
-```text
-Datenprüfung abgeschlossen
-
-✓ 271 spielbare Straßen
-✓ 47 Einrichtungen
-✓ Gemeindegrenze geprüft
-✓ Straßengeometrien geprüft
-
-⚠ 2 mögliche POI-Duplikate wurden zusammengeführt
-```
-
-## 5.5 Vorschau
-
-```text
-Oberasbach
-
-271 Straßen
-47 Einrichtungen
-3 Feuerwehren
-
-[Stadt speichern & starten]
-```
-
-## 5.6 Installation
-
-```text
-saveCity()
-↓
-setActiveCityId()
-↓
-loadActiveCity()
-↓
-Karte aktualisieren
-↓
-ContentRepository aktualisieren
-↓
-Spielbereit
-```
-
-## 5.7 Stadt löschen
-
-Bestätigungsdialog:
-
-```text
-„Zirndorf wirklich löschen?
-
-Die lokal gespeicherten Straßen- und POI-Daten
-werden entfernt.“
-
-[Abbrechen] [Stadt löschen]
-```
-
-Statistik zunächst getrennt behandeln.
-
-## 5.8 Kein Stadtwechsel während aktiver Runde
-
-Während:
-
-```text
-active
-preparing
-```
-
-Stadtwechsel deaktivieren oder Spielabbruch verlangen.
-
-## 5.9 Accessibility
-
-- [ ] `aria-label`
-- [ ] `role="dialog"`
-- [ ] Fokusmanagement
-- [ ] ESC zum Schließen
-- [ ] `aria-live` für Fortschritt
-
-## Abschlusskriterium
-
-Benutzer kann:
-
-1. Stadt suchen
-2. Stadt herunterladen
-3. Validierungsbericht sehen
-4. Stadt speichern
-5. zweite Stadt installieren
-6. wechseln
-7. löschen
-
----
-
-# Phase 6 – `app.js` vollständig stadtdynamisch machen
-
-## Ziel
-
-Alle festen Oberasbach-Werte aus der Laufzeitlogik entfernen.
-
-## 6.1 Feste Stadtwerte aus `CONFIG` entfernen
-
-Beispiele:
-
-```javascript
-municipalityName
-postalCode
-initialCenter
-geometryBbox
-bounds
-fireStations
-geometryCacheKey
-statisticsStorageKey
-```
-
-Globale App-Konfiguration soll nur echte App-Einstellungen enthalten.
-
-## 6.2 Laufzeitzustand
-
-```javascript
-const cityContext = {
-  metadata: null,
-  streetTargets: [],
-  poiTargets: []
-};
-```
-
-## 6.3 Startup
-
-```text
-HTML laden
-↓
-IndexedDB öffnen
-↓
-aktive Stadt-ID lesen
-↓
-Stadt vorhanden?
-```
-
-Wenn ja:
-
-```text
-Stadtdaten laden
-↓
-Spiel initialisieren
-```
-
-Wenn nein:
-
-```text
-Oberasbach-Paket importieren
-```
-
-oder Stadt-Auswahl öffnen.
-
-## 6.4 ContentRepository dynamisch
-
-Statt:
-
-```javascript
-prepareStreetTargets(window.OBERASBACH_STREETS)
-```
-
-neu:
-
-```javascript
-contentRepository.streetTargets =
-  targetApi.prepareStreetTargets(cityStreets, geometryApi);
-
-contentRepository.poiTargets =
-  targetApi.preparePoiTargets(cityPois, categories);
-```
-
-## 6.5 Karte dynamisch
-
-Nach Stadtwechsel:
-
-```javascript
-map.fitBounds(...)
-map.setMaxBounds(...)
-```
-
-## 6.6 Kartenbeschriftung
-
-Dynamisch:
-
-```text
-Unbeschriftete Straßenkarte von Siegen
-```
-
-## 6.7 Feuerwehrmarker
-
-Statt festem `CONFIG.fireStations`:
-
-```javascript
-activePois.filter(
-  poi => poi.category === "fire_station"
-)
-```
-
-## 6.8 Keine Geocoding-Abfrage während einer Runde
-
-Alt:
-
-```text
-Alarm
-↓
-resolveStreetGeometry()
-↓
-Nominatim
-↓
-Wartezeit
-↓
-Runde
-```
-
-Neu:
-
-```text
-Alarm
-↓
-Straße enthält bereits geometry
-↓
-Runde startet sofort
-```
-
-## 6.9 Geometriecache entfernen
-
-Der alte Oberasbach-Geometriecache wird nach erfolgreicher Migration nicht mehr benötigt.
-
-## 6.10 `geocoderDelayMs` entfernen
-
-Kein Geocoder mehr während des Spiels.
-
-## 6.11 Integrationstests
-
-Neue Datei:
-
-```text
-tests/multi-city-integration-tests.js
-```
-
-Testfälle:
-
-- [ ] Stadt A aktiv
-- [ ] nur Ziele aus Stadt A
-- [ ] Stadt B aktivieren
-- [ ] nur Ziele aus Stadt B
-- [ ] Kartenbounds wechseln
-- [ ] Feuerwehrmarker wechseln
-- [ ] POIs wechseln
-- [ ] kein Netzwerkzugriff während Spielrunde
-- [ ] keine alten Oberasbach-Daten bleiben aktiv
-
-## Abschlusskriterium
-
-Mindestens Oberasbach und eine zweite Gemeinde funktionieren vollständig.
-
----
-
-# Phase 7 – Statistik stadtbezogen speichern
-
-## Ziel
-
-Statistiken verschiedener Städte dürfen nicht vermischt werden.
-
-## 7.1 Storage-Key
-
-Beispiel:
-
-```text
-strassentrainer-statistik-osm-relation-12345-v2
-```
-
-## 7.2 Store beim Stadtwechsel
-
-```javascript
-createStatisticsStore(
-  localStorage,
-  getStatisticsStorageKey(activeCity.id)
-)
-```
-
-## 7.3 Statistiküberschrift
-
-```text
-Statistik – Oberasbach
-```
-
-## 7.4 Export
-
-Beispiel:
-
-```text
-strassentrainer-statistik-oberasbach-2026-08-27.json
-```
-
-Metadaten:
-
-```javascript
-{
-  cityId,
-  cityName,
-  exportedAt,
-  statistics
-}
-```
-
-## 7.5 Import prüfen
-
-Wenn Datei und aktive Stadt nicht zusammenpassen:
-
-```text
-Diese Statistik gehört zu Oberasbach.
-Aktuelle Stadt: Siegen.
-```
-
-## Abschlusskriterium
-
-Eine Runde in Stadt A verändert niemals Statistik B.
-
----
-
-# Phase 8 – Oberasbach-Migration und Rückwärtskompatibilität
-
-## Ziel
-
-Die bestehenden kuratierten Oberasbach-Daten erhalten.
-
-## 8.1 Bestehende Straßen migrieren
-
-Vorhanden:
-
-```text
-data/oberasbach-streets.js
-```
-
-Für die neue Architektur werden vollständige lokale Geometrien benötigt.
-
-## 8.2 Bestehende POIs erhalten
-
-Der Oberasbach-Datensatz ist qualitativ reichhaltiger als eine einfache automatische OSM-Abfrage.
-
-Grundregel:
-
-```text
-kuratierte, geprüfte Oberasbach-Daten
->
-ungeprüfte automatische OSM-Daten
-```
-
-OSM wird zum Abgleich verwendet, nicht automatisch als Überschreibung.
-
-## 8.3 Oberasbach als Default-Paket
-
-Später sinnvoll:
-
-```text
-data/cities/oberasbach.json
-```
-
-Schema:
-
-```javascript
-{
-  schemaVersion: 1,
-  city: {...},
-  streets: [...],
-  pois: [...]
-}
-```
-
-Beim ersten Start:
-
-```text
-Keine IndexedDB-Stadt vorhanden
-↓
-Oberasbach-Paket importieren
-↓
-Oberasbach aktivieren
-```
-
-## Abschlusskriterium
-
-Der bisherige Oberasbach-Spielumfang bleibt mindestens vollständig erhalten.
-
----
-
-# Phase 9 – Stadt-Export und Stadt-Import
-
-## Ziel
-
-Bereits heruntergeladene oder kuratierte Städte können weitergegeben werden.
-
-## 9.1 Export
-
-Beispiel:
-
-```text
-oberasbach-strassentrainer-v1.json
-```
-
-Inhalt:
-
-```javascript
-{
-  schemaVersion: 1,
-  exportedAt: "...",
-  city: {...},
-  streets: [...],
-  pois: [...]
-}
-```
-
-## 9.2 Import
-
-Ablauf:
-
-```text
-Datei auswählen
-↓
-Schema prüfen
-↓
-Daten validieren
-↓
-Stadtinformationen anzeigen
-↓
-speichern
-```
-
-## 9.3 Validierung
-
-Prüfen:
-
-- [ ] `schemaVersion`
-- [ ] `city.id`
-- [ ] `city.name`
-- [ ] Bounds
-- [ ] Straßenarray
-- [ ] eindeutige IDs
-- [ ] Geometrietyp
-- [ ] Koordinaten
-- [ ] POI-Kategorien
-- [ ] keine gefährlichen Objektkeys wie `__proto__`
-
----
-
-# Phase 10 – Fehlerbehandlung und UX
-
-## Ziel
-
-API-Ausfälle dürfen installierte Städte nicht unspielbar machen.
-
-## 10.1 Nominatim nicht erreichbar
-
-```text
-Die Stadtsuche ist momentan nicht erreichbar.
-
-Bereits installierte Städte können weiterhin gespielt werden.
-```
-
-## 10.2 Overpass Timeout
-
-```text
-Die Daten für diese Stadt konnten momentan nicht vollständig geladen werden.
-
-Bitte versuche den Download später erneut.
-```
-
-Keine unvollständige Stadt speichern.
-
-## 10.3 Zu wenige Straßen
-
-```text
-Es wurden nur 4 spielbare Straßen gefunden.
-
-Diese Gemeinde eignet sich derzeit nicht für den Straßentrainer.
-```
-
-## 10.4 Download abbrechen
-
-Optional über `AbortController`.
-
----
-
-# Phase 11 – Qualitätssicherung mit mehreren Stadtgrößen
-
-## Kleine Gemeinde
-
-Beispiel:
-
-```text
-Oberasbach
-```
-
-Prüfen:
-
-- [ ] Gemeindesuche
-- [ ] Gemeindegrenze
-- [ ] Straßen
-- [ ] POIs
-- [ ] Geschwindigkeit
-- [ ] OSM-Abgleich
-
-## Mittelgroße Stadt
-
-Beispiel:
-
-```text
-Siegen
-```
-
-Prüfen:
-
-- [ ] Datenmenge
-- [ ] IndexedDB-Größe
-- [ ] Downloadzeit
-- [ ] Kartenperformance
-- [ ] MultiLineStrings
-
-## Große Stadt
-
-Beispiel:
-
-```text
-Nürnberg
-```
-
-später eventuell:
-
-```text
-München
-```
-
-Prüfen:
-
-- [ ] Overpass-Limit
-- [ ] JSON-Größe
-- [ ] Speicherdauer
-- [ ] Rendering
-- [ ] Browser-RAM
-
----
-
-# Phase 12 – Performanceoptimierung
-
-## 12.1 Nicht alle Geometrien gleichzeitig zeichnen
-
-IndexedDB enthält alle Straßen.
-
-Leaflet zeichnet nur benötigte Ziele bzw. Ergebnisdarstellungen.
-
-## 12.2 Daten beim Stadtwechsel einmal laden
+Grundprinzip:
 
 ```text
 Stadt aktivieren
 ↓
-Straßen + POIs einmal laden
+relevante Daten einmal laden
 ↓
 im Arbeitsspeicher halten
 ↓
-gesamte Spielsitzung verwenden
+während der Spielsitzung verwenden
 ```
 
-## 12.3 Geometrie nicht unnötig duplizieren
-
-Keine parallelen Kopien in mehreren Caches, wenn vermeidbar.
+Der ursprüngliche Masterplan sieht genau dieses Verhalten vor.
 
 ---
 
-# Phase 13 – Offlinefähigkeit
+# 9. Phase 12.5 – TrainingAreas
 
-## Bereits lokal möglich
+**Status: ✅ Grundarchitektur abgeschlossen**
 
-Nach Stadtinstallation:
+Vorhanden:
 
-- Straßendaten
-- POIs
-- Geometrien
-- Game-Engine
-- Statistik
+- administrative Gebiete
+- `areas`-Store
+- Hierarchie
+- Straßen können mehreren Gebieten angehören
+- POI-Zuordnung
+- lokale Filterung
+- aktive TrainingArea
+- keine getrennte Statistik pro Area
 
-## Für vollständiges Offline-Spiel später nötig
+Die Grundarchitektur bleibt bestehen.
+
+---
+
+# 10. Phase 13 – Offlinefähigkeit
+
+## 13.1 Offline-Grundsystem
+
+**Status: ✅**
 
 - Leaflet lokal
 - Turf lokal
 - Service Worker
-- Kartenkacheln oder alternative Offline-Karte
+- App Shell
+- installierte Städte offline spielbar
 
-Nicht Teil der ersten Multi-Stadt-Version.
+## 13.2 Offline-Basemap
+
+**Status: ✅**
+
+Auch ohne externe Kartenkacheln kann aus den lokal gespeicherten Geometrien eine einfache Karte erzeugt werden.
+
+Damit ist das Spiel nach einer Dataset-Installation weitgehend unabhängig von externen Diensten.
 
 ---
 
-# Phase 14 – Spätere Erweiterungen
+# 11. Phase 14 – Erweiterungen
 
-## Weitere POI-Kategorien
+## 14.1 Stadtupdate und Versionsvergleich
+
+**Status: ✅**
+
+Vorhanden:
+
+```text
+alte Version
+↓
+neues Dataset
+↓
+deterministischer Diff
+↓
+Straßen hinzugefügt
+Straßen entfernt
+POIs hinzugefügt
+POIs entfernt
+↓
+atomisches Update
+```
+
+Für die neue Architektur ist das sogar besonders wertvoll.
+
+---
+
+## 14.2 Erweiterte POI-Kategorien
+
+**Status: ✅**
+
+Vorhandene Registry u. a.:
 
 - Feuerwehr
 - Polizei
 - Krankenhaus
-- Pflegeeinrichtungen
+- Pflege
 - Tankstellen
 - Schulen
 - Kitas
 - Unternehmen
 - Hotels
-- Gaststätten
+- Gastronomie
 - Sportstätten
 - öffentliche Gebäude
 
-## Stadtpakete
+Der alte Masterplan sah diese Erweiterung ausdrücklich vor.
+
+---
+
+## 14.3 Paketmodell
+
+**Status: ✅**
+
+Vorhanden:
+
+- Package-ID
+- Package-Typ
+- Version
+- Metadaten
+- Hash
+- Update-Regeln
+- curated / OSM
+- Oberasbach-Paket
+
+Dieses System wird zum **zentralen Übergabepunkt der neuen OSM-Pipeline**.
+
+---
+
+## 14.3a Trust-Semantik
+
+**Status: ✅**
+
+Wichtige Trennung:
+
+```text
+Kuratiert
+≠
+kryptografisch verifiziert
+```
+
+SHA-256 bestätigt Datenintegrität, aber keine Identität des Herausgebers.
+
+---
+
+# 12. Phase 14.4a – lokale Trainingsgebiete
+
+**Status: 🟡 teilweise fertig / eingefroren**
+
+Funktionierend:
+
+- Datenmodell
+- Response Areas
+- Custom Areas
+- Zeicheneditor
+- Persistenz
+- Pan/Zoom
+- Membership-Architektur
+- Update-Erhaltung
+
+Bekannter Fehler:
+
+> Ein eindeutig innerhalb Oberasbachs gezeichnetes Polygon wird im realen Browser teilweise weiterhin als außerhalb erkannt.
+
+### Entscheidung
+
+Der Fehler wird **nicht gelöscht oder ignoriert**, aber momentan zurückgestellt.
+
+Status:
+
+```text
+KNOWN ISSUE
+Deferred
+kein Blocker für Dataset-Pipeline
+```
+
+In der normalen UI kann die Funktion gegebenenfalls als **Beta** markiert oder temporär ausgeblendet werden.
+
+Der ursprüngliche Masterplan klassifiziert frei definierte Regionen und Feuerwehr-Einsatzgebiete ohnehin als erweiterte Trainingsgebiete für einen späteren Ausbau.
+
+---
+
+# 13. Neue Phase 15 – Overpass-freie Dataset-Architektur
+
+Das ist ab jetzt der **zentrale Entwicklungsstrang**.
+
+---
+
+# Phase 15.0 – Architektur einfrieren und Ausgangspunkt sichern
+
+### Ziel
+
+Bevor die neue Pipeline beginnt:
+
+- Git-Stand sichern
+- sämtliche Tests ausführen
+- bekannten Polygonfehler dokumentieren
+- Overpass-Code unangetastet lassen
+- keine Game-Engine-Änderungen
+
+### Ergebnis
+
+Ein klar reproduzierbarer Ausgangspunkt.
+
+### Exit Gate
+
+```text
+bestehende Regression     PASS
+Oberasbach 271 / 60       PASS
+Spielmodi                 PASS
+Statistik                 PASS
+Offline                   PASS
+Known Issues dokumentiert PASS
+```
+
+---
+
+# Phase 15.1 – Dataset Source Abstraction
+
+**Priorität: 🔴 jetzt**
+
+### Ziel
+
+Der Straßentrainer darf intern nicht mehr voraussetzen:
+
+> „Eine Stadt kommt von Overpass.“
+
+Stattdessen wird eine neutrale Datenquelle eingeführt.
+
+Konzeptionell:
+
+```text
+DatasetProvider
+```
+
+mit Aufgaben wie:
+
+```text
+searchDatasets()
+getDatasetMetadata()
+downloadDataset()
+checkForUpdate()
+```
+
+### Wichtig
+
+Noch:
+
+- kein PBF
+- kein Geofabrik-Parser
+- kein PostGIS
+- kein Deutschland-Download
+
+Zunächst ausschließlich **Entkopplung**.
+
+### Zielarchitektur
+
+```text
+City Manager
+     ↓
+DatasetProvider
+     ↓
+Dataset
+     ↓
+Validator
+     ↓
+IndexedDB
+```
+
+Der City Manager weiß nicht, woher das Dataset kommt.
+
+### Exit Gate
+
+Ein Test-Dataset kann vollständig installiert werden, **ohne dass Overpass aufgerufen wird**.
+
+---
+
+# Phase 15.2 – OSM-PBF Dataset Builder – Proof of Concept Olpe
+
+**Priorität: 🔴**
+
+Das ist die wichtigste technische Proof-of-Concept-Phase.
+
+### Eingabe
+
+Ein regionaler OSM-PBF-Extrakt.
+
+Zunächst nur:
+
+> **Nordrhein-Westfalen → Olpe**
+
+### Builder
+
+Separates Werkzeug:
+
+```text
+tools/
+└── dataset-builder/
+```
+
+Nicht in die Browser-Anwendung integrieren.
+
+### Aufgabe
+
+Aus OSM-Rohdaten:
+
+1. Gemeindegrenze bestimmen
+2. Straßen innerhalb der Grenze bestimmen
+3. Straßengeometrien rekonstruieren
+4. Namen normalisieren
+5. Duplikate sinnvoll zusammenführen
+6. POIs anhand der bestehenden Registry bestimmen
+7. administrative Areas bestimmen
+8. Metadaten erzeugen
+9. validieren
+10. Package schreiben
+11. SHA-256 erzeugen
+
+### Ausgabe
+
+Zum Beispiel:
+
+```text
+de-nw-olpe.json
+```
+
+### Vergleichstest
+
+Sehr wichtig:
+
+```text
+Olpe bisher über Overpass
+        VS
+Olpe über PBF Builder
+```
+
+Verglichen werden:
+
+- Straßenanzahl
+- Namen
+- Geometrien
+- POI-Anzahl
+- POI-Kategorien
+- Boundary
+- Areas
+- Duplikate
+- ungültige Objekte
+
+### Exit Gate
+
+Olpe lässt sich aus PBF erzeugen und im bestehenden Straßentrainer spielen.
+
+---
+
+# Phase 15.3 – Package Contract stabilisieren
+
+**Priorität: 🔴**
+
+Jetzt wird exakt festgelegt, was ein offizielles Straßentrainer-Dataset enthält.
 
 Beispiel:
 
 ```text
-„Feuerwehr Oberasbach – geprüftes Trainingspaket“
+package
+dataset
+boundary
+streets
+pois
+areas
+metadata
 ```
 
-## Stadt aktualisieren
+Metadaten mindestens:
 
 ```text
-Oberasbach
-
-Datenstand:
-12.08.2026
-
-[Von OpenStreetMap aktualisieren]
+datasetId
+datasetKind
+name
+state
+country
+osmRelationId
+version
+generatedAt
+osmDataTimestamp
+contentHash
+builderVersion
 ```
 
-## Versionsvergleich
+### Ziel
+
+Builder und Browser kommunizieren über **einen stabilen Vertrag**.
+
+Der Builder darf später komplett neu geschrieben werden, solange das Package-Schema gleich bleibt.
+
+---
+
+# Phase 15.4 – Dataset-Katalog
+
+**Priorität: 🔴**
+
+Der Benutzer soll nicht mehr direkt Nominatim fragen müssen.
+
+Stattdessen entsteht ein eigener Katalog.
+
+Beispiel:
 
 ```text
-271 → 274 Straßen
-60 → 63 POIs
-```
-
-## Erweiterte Trainingsgebiete
-
-Später denkbar:
-
-```text
+Olpe
+Nordrhein-Westfalen
 Gemeinde
-Landkreis
-Feuerwehr-Einsatzgebiet
-frei definierte Region
+Version 2026.09.06
+
+Siegen
+Nordrhein-Westfalen
+Stadt
+Version 2026.09.06
 ```
+
+Technisch beispielsweise:
+
+```text
+catalog.json
+```
+
+mit:
+
+```json
+{
+  "datasets": [
+    {
+      "id": "de-nw-olpe",
+      "name": "Olpe",
+      "type": "municipality",
+      "state": "Nordrhein-Westfalen",
+      "version": "2026.09.06"
+    }
+  ]
+}
+```
+
+### Suche
+
+```text
+"Olpe"
+↓
+lokaler / eigener Katalog
+↓
+Olpe
+↓
+Package laden
+```
+
+Damit verschwindet langfristig auch die Nominatim-Abhängigkeit aus dem normalen Installationspfad.
 
 ---
 
-# 15. Empfohlene Entwicklungsreihenfolge
+# Phase 15.5 – Installation vollständig ohne Overpass
 
-```text
-0  Bestehenden Stand sichern
-│
-├─ 1  city-storage.js
-│      ↓ testen
-│
-├─ 2  Nominatim-Suche
-│      ↓ testen
-│
-├─ 3a Overpass-Straßen
-│      ↓ testen
-│
-├─ 3b Overpass-POIs
-│      ↓ testen
-│
-├─ 4  Datenvalidierung
-│      ↓ testen
-│
-├─ 5  Stadtmanager-UI
-│      ↓ testen
-│
-├─ 6a aktive Stadt in app.js
-│      ↓ testen
-│
-├─ 6b dynamische Karte
-│      ↓ testen
-│
-├─ 6c lokale Straßengeometrien
-│      ↓ testen
-│
-├─ 7  stadtbezogene Statistik
-│      ↓ testen
-│
-├─ 8  Oberasbach-Migration + OSM-Abgleich
-│      ↓ testen
-│
-├─ 9  JSON Import/Export
-│      ↓ testen
-│
-└─ 10 Gesamttest mit mehreren Städten
-```
+**Priorität: 🔴**
 
----
-
-# 16. Was ausdrücklich nicht gleichzeitig verändert werden sollte
-
-Während des Multi-Stadt-Umbaus möglichst unangetastet lassen:
-
-```text
-game-engine.js
-timer.js
-Punktekurven
-Prüfungsmodus
-Zeitmodus
-Rangsystem
-grundlegende Statistikberechnung
-bestehende Zielauswertung
-Kartendesign
-```
-
-Nur ihre **Datenzuführung** verändert sich.
-
----
-
-# 17. Zentrale technische Leitregel
-
-> **Externe Dienste werden ausschließlich zum Installieren, Prüfen oder Aktualisieren einer Stadt verwendet. Das eigentliche Spiel greift niemals auf Nominatim oder Overpass zu.**
-
-```text
-ONLINE-PHASE
-
-Stadt suchen
-↓
-Stadt herunterladen
-↓
-OSM-Daten validieren
-↓
-Stadt speichern
-
-
-SPIEL-PHASE
-
-IndexedDB
-↓
-Game Engine
-↓
-Leaflet
-```
-
----
-
-# 18. Soll-Zustand der ersten Version
-
-Ein Benutzer öffnet den Trainer.
-
-Er sieht:
-
-```text
-Aktuelle Stadt: Oberasbach ▾
-```
-
-Er klickt:
+Jetzt wird der echte Nutzerworkflow umgestellt.
 
 ```text
 Neue Stadt hinzufügen
+↓
+Dataset-Katalog durchsuchen
+↓
+Dataset auswählen
+↓
+Package herunterladen
+↓
+Hash prüfen
+↓
+Validator
+↓
+IndexedDB
+↓
+Stadt aktivieren
 ```
 
-und sucht:
+### Kritischer Test
+
+Im Browser werden Netzwerkaufrufe überwacht.
+
+Erwartung:
 
 ```text
-Zirndorf
+Nominatim: 0
+Overpass: 0
 ```
 
-Die Anwendung findet:
+und trotzdem lässt sich Olpe komplett installieren.
+
+---
+
+# Phase 15.6 – Updates ohne Overpass
+
+**Priorität: 🔴**
+
+Bestehende Update-Architektur wird an Dataset-Versionen angeschlossen.
+
+Beispiel:
 
 ```text
-Zirndorf
-Landkreis Fürth · Bayern
+Installiert:
+Olpe 2026.09.05
+
+Katalog:
+Olpe 2026.09.08
 ```
 
-Nach Auswahl:
+UI:
 
 ```text
-Gemeindegrenze gefunden
-Straßen werden geladen
-POIs werden geladen
-Daten werden geprüft
-Daten werden normalisiert
-
-318 Straßen
-47 Einrichtungen
-```
-
-Danach:
-
-```text
-Datenprüfung abgeschlossen
-
-✓ Gemeindegrenze geprüft
-✓ Straßengeometrien geprüft
-✓ 318 spielbare Straßen
-✓ 47 Einrichtungen
-⚠ 3 Duplikate zusammengeführt
+Update verfügbar
 ```
 
 Dann:
 
 ```text
-[Stadt speichern & starten]
+neues Package
+↓
+Hash
+↓
+Validator
+↓
+bestehender Diff
+↓
++ Straßen
+- Straßen
++ POIs
+- POIs
+↓
+Bestätigung
+↓
+atomisches Update
 ```
 
-Die Karte springt auf Zirndorf.
-
-Eine Runde startet ohne weitere API-Anfrage, da die vollständige Straßengeometrie bereits lokal vorhanden ist.
-
-Beim Wechsel nach Oberasbach erscheinen wieder ausschließlich:
-
-- Oberasbacher Straßen
-- Oberasbacher POIs
-- Oberasbacher Feuerwehren
-- Oberasbacher Statistik
-- Oberasbacher Kartenausschnitt
+Keine Live-OSM-Abfrage durch den Browser.
 
 ---
 
-# 19. Prioritäten
+# Phase 15.7 – mehrere Städte aus NRW
 
-## Muss für Version 1
+**Priorität: 🟠**
 
-- [ ] IndexedDB
-- [ ] mehrere Städte
-- [ ] Nominatim-Suche
-- [ ] administrative Gemeindegrenze
-- [ ] Overpass-Straßen
-- [ ] vollständige Straßengeometrien
-- [ ] grundlegende POIs
-- [ ] OSM-Datenvalidierung
-- [ ] Duplikaterkennung
-- [ ] Stadtwechsel
-- [ ] dynamische Karte
-- [ ] lokale Rundenauflösung
-- [ ] getrennte Statistik
-- [ ] Oberasbach weiterhin vollständig funktionsfähig
-- [ ] Fehlerbehandlung
-- [ ] bestehende Tests weiterhin erfolgreich
+Nach Olpe:
 
-## Sehr sinnvoll direkt danach
+- Siegen
+- Oberasbach nicht, da Bayern
+- weitere kleine Gemeinde
+- mittelgroße Stadt
+- Großstadt
 
-- [ ] Stadt JSON exportieren
-- [ ] Stadt JSON importieren
-- [ ] Oberasbach als fertiges Stadtpaket
-- [ ] Oberasbach-vs.-OSM-Abgleich
-- [ ] Aktualisierungsfunktion
-
-## Später
-
-- [ ] große Städte optimieren
-- [ ] mehr POI-Typen
-- [ ] automatische Datenvergleiche
-- [ ] Landkreis-Modus
-- [ ] vollständiger Offline-Modus
-- [ ] Service Worker
-- [ ] lokale Karten
-- [ ] kuratierte Stadtpakete
-
----
-
-# 20. Wichtigster Punkt für das bestehende Projekt
-
-Der Umbau ist **kein Neubau des Straßentrainers**.
-
-Im Wesentlichen werden folgende feste Oberasbach-Abhängigkeiten ersetzt:
+Sinnvolle Testmatrix:
 
 ```text
-OBERASBACH_STREETS
-OBERASBACH_POIS
-CONFIG.bounds
-CONFIG.initialCenter
-CONFIG.fireStations
-resolveStreetGeometry()
+klein
+mittel
+groß
 ```
 
-durch:
+Prüfen:
 
-```text
-activeCity
-activeCity.streets
-activeCity.pois
-activeCity.bounds
-activeCity.center
-lokal gespeicherte geometry
-```
-
-Game-Engine, Timer, Zielauswertung und das eigentliche Spiel bleiben weitgehend unverändert.
+- Package-Größe
+- Buildzeit
+- Speicher
+- Download
+- IndexedDB
+- Rendering
+- Startzeit
+- POI-Dichte
+- Straßenduplikate
 
 ---
 
-# 21. Datenqualitäts-Grundsatz
+# Phase 15.8 – automatisierte Dataset-Pipeline
 
-OpenStreetMap ist die zentrale externe Datenquelle, aber **kein unfehlbares Wahrheitsregister**.
+**Priorität: 🟠**
 
-Deshalb gilt:
+Bis dahin können Packages lokal erzeugt werden.
 
-> **OSM liefert die Ausgangsdaten. Die Anwendung prüft, normalisiert und dokumentiert sie, bevor daraus ein spielbares Stadtpaket entsteht.**
+Jetzt Automatisierung:
 
-Für kuratierte Daten wie Oberasbach gilt zusätzlich:
+```text
+neuer OSM-PBF
+↓
+Builder
+↓
+Datasets erzeugen
+↓
+Tests
+↓
+Hashes
+↓
+Katalog aktualisieren
+↓
+veröffentlichen
+```
 
-> **Bestehende geprüfte Daten werden nicht blind durch OSM überschrieben, sondern gegen OSM abgeglichen.**
+Wichtig:
 
-Dadurch erhält der universelle Straßentrainer nicht nur Flexibilität, sondern auch eine nachvollziehbare und möglichst hohe Datenqualität.
+> Kein fehlerhaftes Dataset wird automatisch veröffentlicht.
+
+Pipeline:
+
+```text
+BUILD
+↓
+VALIDATE
+↓
+QA
+↓
+PUBLISH
+```
+
+---
+
+# 14. Phase 16 – Deutschlandweite Dataset-Infrastruktur
+
+Erst wenn NRW stabil funktioniert.
+
+### Ziel
+
+Deutschland nicht als gigantisches Browser-Dataset, sondern als Build-Quelle.
+
+Pipeline kann nach Bundesländern arbeiten:
+
+```text
+Bayern
+NRW
+Hessen
+Niedersachsen
+...
+```
+
+Der Nutzer lädt weiterhin nur:
+
+> **sein konkretes Trainingsgebiet**
+
+herunter.
+
+---
+
+# 15. Phase 16.1 – Speicher- und Downloadoptimierung
+
+Dann erst untersuchen:
+
+- JSON
+- komprimiertes JSON
+- Streaming
+- kleinere Geometrien
+- Precision Reduction
+- Package Split
+- Delta Updates
+
+Keine vorzeitige Optimierung.
+
+Zuerst messen.
+
+---
+
+# 16. Phase 16.2 – Dataset-Veröffentlichung
+
+Zielstruktur konzeptionell:
+
+```text
+/catalog.json
+
+/datasets/
+    de-nw-olpe/
+        manifest.json
+        package.json
+
+    de-nw-siegen/
+        manifest.json
+        package.json
+```
+
+Später ggf. CDN.
+
+Der Browser braucht lediglich normale HTTP-Downloads.
+
+---
+
+# 17. Phase 17 – Landkreis-Datasets
+
+Das ist die bisher geplante **14.4b**, aber jetzt auf der richtigen Datenarchitektur.
+
+### Beispiel
+
+> Kreis Olpe
+
+Ein Dataset enthält:
+
+```text
+Kreis Olpe
+│
+├── Olpe
+├── Wenden
+├── Drolshagen
+├── Attendorn
+└── ...
+```
+
+### Wichtigstes Datenproblem
+
+Gleiche Straßennamen.
+
+Beispiel:
+
+```text
+Hauptstraße · Olpe
+Hauptstraße · Wenden
+```
+
+dürfen nicht zu einer einzigen Straße verschmelzen.
+
+Identität muss deshalb berücksichtigen:
+
+```text
+dataset
++
+municipality
++
+street identity
+```
+
+Keine rein namensbasierte Zusammenführung über Gemeindegrenzen.
+
+---
+
+# 18. Phase 17.1 – administrative Untergebiete
+
+Ein Landkreis-Dataset soll automatisch enthalten:
+
+- Landkreisgrenze
+- Gemeinden
+- Städte
+- ggf. geeignete administrative Untereinheiten
+
+Diese werden normale TrainingAreas.
+
+Damit kann der Benutzer wählen:
+
+```text
+Gesamter Kreis Olpe
+Olpe
+Wenden
+Attendorn
+...
+```
+
+---
+
+# 19. Phase 17.2 – Feuerwehr-Einsatzgebiete
+
+Dann kommen die wirklich feuerwehrspezifischen Gebiete.
+
+```text
+Landkreis
+↓
+Gemeinde
+↓
+Feuerwehr-Einsatzgebiet
+```
+
+Einsatzgebiete können:
+
+- manuell definiert
+- importiert
+- kuratiert
+- später zentral verteilt
+
+werden.
+
+---
+
+# 20. Phase 17.3 – Polygoneditor reparieren
+
+Spätestens hier wird das momentan offene 14.4a-Problem wieder aufgenommen.
+
+Dann existiert eine deutlich bessere Grundlage:
+
+```text
+Municipality Boundary
+District Boundary
+Response Areas
+Custom Areas
+```
+
+Der Polygoneditor bekommt anschließend eine eigene fokussierte QA-Phase.
+
+### Exit Gate
+
+Reale Browser-Smokes:
+
+- Polygon vollständig innen → akzeptiert
+- teilweise außen → abgelehnt
+- vollständig außen → abgelehnt
+- Grenzfall → definiertes Verhalten
+- Reload → erhalten
+- Update → erhalten
+- Landkreisübergreifend nur erlaubt, wenn Dataset es enthält
+
+---
+
+# 21. Phase 18 – kuratierte Feuerwehr-Pakete
+
+Langfristig sehr wichtig.
+
+Beispiel:
+
+```text
+Feuerwehr Olpe
+Trainingspaket v2.3
+```
+
+kann enthalten:
+
+- geprüfte Straßen
+- korrigierte Namen
+- relevante POIs
+- Feuerwachen
+- Einsatzgebiete
+- lokale Besonderheiten
+
+OSM bleibt Ausgangspunkt.
+
+Aber kuratierte Änderungen können darüberliegen:
+
+```text
+OSM Dataset
+    +
+lokale Korrekturen
+    =
+kuratierte Feuerwehr-Version
+```
+
+Dabei gilt weiterhin:
+
+> **Curated > automatisch erzeugtes OSM**, wenn bewusst lokale Korrekturen vorgenommen wurden.
+
+---
+
+# 22. Phase 19 – Produktionsreife
+
+Erst danach geht es um echte Produktreife.
+
+Prüfen:
+
+### Zuverlässigkeit
+
+- fehlendes Dataset
+- defekter Download
+- Hash falsch
+- Package beschädigt
+- Update abgebrochen
+- IndexedDB voll
+- Offline
+- Service Worker Update
+
+### Performance
+
+- kleine Gemeinde
+- Großstadt
+- Landkreis
+- Smartphone
+- Tablet
+- Desktop
+
+### Datenqualität
+
+- Straßenanzahl
+- gleiche Namen
+- MultiLineStrings
+- Grenzstraßen
+- POIs
+- nicht benannte Straßen
+- Duplikate
+
+---
+
+# 23. Phase 20 – Release Candidate
+
+Erst jetzt würde ich von einer stabilen Version sprechen.
+
+Minimum:
+
+```text
+Oberasbach     ✅
+Olpe           ✅
+Siegen         ✅
+Großstadt      ✅
+Landkreis      ✅
+
+Installation ohne Overpass ✅
+Updates ohne Overpass      ✅
+Offline-Spiel              ✅
+Statistik                  ✅
+TrainingAreas              ✅
+Packages                   ✅
+Regression                 ✅
+Mobile                     ✅
+```
+
+---
+
+# 24. Neue Entwicklungsreihenfolge auf einen Blick
+
+```text
+BISHER
+────────────────────────────────────
+
+0–10.5  Multi-City-Grundarchitektur
+         ✅
+
+11       QA
+         ✅
+
+12       Performance
+         ✅
+
+12.5     TrainingAreas
+         ✅
+
+13.1     Offline Foundation
+         ✅
+
+13.2     Offline Basemap
+         ✅
+
+14.1     Updates / Diff
+         ✅
+
+14.2     POI-Kategorien
+         ✅
+
+14.3     Package-System
+         ✅
+
+14.3a    Trust-Semantik
+         ✅
+
+14.4a    Custom TrainingAreas
+         🟡 Polygon Known Issue
+
+
+NEUER HAUPTPFAD
+────────────────────────────────────
+
+15.0     Baseline sichern
+         ↓
+15.1     DatasetProvider
+         ↓
+15.2     PBF → Olpe Proof of Concept
+         ↓
+15.3     Package Contract
+         ↓
+15.4     Dataset-Katalog
+         ↓
+15.5     Installation ohne Overpass
+         ↓
+15.6     Updates ohne Overpass
+         ↓
+15.7     mehrere NRW-Datasets
+         ↓
+15.8     automatisierte Pipeline
+         ↓
+16       Deutschland-Skalierung
+         ↓
+16.1     Performance / Kompression
+         ↓
+16.2     Dataset Publishing
+         ↓
+17       Landkreis-Datasets
+         ↓
+17.1     Gemeinden als TrainingAreas
+         ↓
+17.2     Feuerwehr-Einsatzgebiete
+         ↓
+17.3     Polygoneditor finalisieren
+         ↓
+18       kuratierte Feuerwehr-Pakete
+         ↓
+19       Produktionshärtung
+         ↓
+20       Release Candidate
+```
+
+---
+
+# 25. Strikte Architekturregeln
+
+Diese Regeln werden ab jetzt in **jeden Coding-Prompt** aufgenommen.
+
+### Regel 1 – Game Engine schützen
+
+Nicht ohne zwingenden Grund verändern:
+
+```text
+game-engine.js
+timer.js
+Scoring
+Prüfungsmodus
+Zeitmodus
+Ränge
+Kernstatistik
+```
+
+Das entspricht auch der bisherigen Masterplan-Regel.
+
+### Regel 2 – Gameplay ist lokal
+
+Nach Installation:
+
+```text
+IndexedDB
+↓
+Game
+```
+
+Keine externe Geodaten-API.
+
+### Regel 3 – Browser verarbeitet keine PBF-Dateien
+
+PBF-Verarbeitung ist Build-/Server-Tooling.
+
+### Regel 4 – Builder und Web-App getrennt
+
+```text
+Web-App ≠ Dataset Builder
+```
+
+Verbindung ausschließlich über das Package-Schema.
+
+### Regel 5 – keine automatische Qualitätsannahme
+
+Jedes generierte Package:
+
+```text
+Build
+↓
+Normalize
+↓
+Validate
+↓
+Hash
+↓
+Publish
+```
+
+### Regel 6 – Oberasbach bleibt Referenz
+
+Das kuratierte Oberasbach-Paket darf durch automatisierte OSM-Daten **nicht still überschrieben werden**.
+
+### Regel 7 – keine parallele Komplettmodernisierung
+
+Jetzt nicht gleichzeitig:
+
+- ES Modules
+- Framework-Wechsel
+- React
+- TypeScript-Migration
+- komplett neues UI
+- neue Game Engine
+
+Der bisherige Masterplan hat ebenfalls ausdrücklich vorgesehen, die bestehende globale JS-Architektur während des Datenumbaus zunächst beizubehalten.
+
+---
+
+# 26. Teststrategie
+
+Jede größere Phase bekommt vier Ebenen.
+
+## Ebene A – Unit Tests
+
+Beispielsweise:
+
+```text
+Package Parser
+Validator
+Normalizer
+Street Identity
+POI Registry
+Hash
+Diff
+```
+
+## Ebene B – Integration
+
+```text
+Dataset
+↓
+Validator
+↓
+IndexedDB
+↓
+CityContext
+```
+
+## Ebene C – Regression
+
+Nach jeder Phase alle bisherigen Tests.
+
+## Ebene D – echter Browser-Smoke
+
+Der darf künftig **nicht mehr durch Unit Tests ersetzt werden**.
+
+Das haben wir gerade beim Polygon sehr deutlich gesehen.
+
+Eine Phase darf bei Browserfunktionalität nur `PASS` melden, wenn tatsächlich getestet wurde.
+
+---
+
+# 27. Referenzgebiete für QA
+
+Es werden dauerhaft feste Referenzen verwendet:
+
+### Referenz A – Oberasbach
+
+```text
+271 Straßen
+60 POIs
+```
+
+Kuratiertes Golden Dataset.
+
+### Referenz B – Olpe
+
+Erstes Dataset der neuen PBF-Pipeline.
+
+### Referenz C – Siegen
+
+Mittelgroße Stadt.
+
+### Referenz D – Nürnberg/Köln
+
+Große Stadt.
+
+### Referenz E – Kreis Olpe
+
+Landkreis-Test.
+
+Dadurch können wir jede neue Architektur gegen dieselben Gebiete testen.
+
+---
+
+# 28. Definition of Done einer Phase
+
+Eine Phase ist künftig nur abgeschlossen, wenn:
+
+```text
+[ ] Funktion implementiert
+[ ] Unit Tests
+[ ] Integration Tests
+[ ] komplette Regression
+[ ] git diff --check
+[ ] Oberasbach Regression
+[ ] keine unbeabsichtigte Game-Engine-Änderung
+[ ] Browser-Smoke, wenn UI betroffen
+[ ] Known Issues dokumentiert
+[ ] keine zukünftige Phase vorweggebaut
+```
+
+Das wird strikt eingehalten.
+
+---
+
+# 29. Umgang mit dem Polygonfehler
+
+Damit wir ihn nicht vergessen:
+
+**Known Issue ID**
+
+```text
+TA-POLYGON-001
+```
+
+Beschreibung:
+
+> Eindeutig innerhalb der Stadtgrenze gezeichnete Custom Region wird im realen Oberasbach-Browserpfad teilweise als außerhalb erkannt.
+
+Status:
+
+```text
+DEFERRED
+```
+
+Blockiert:
+
+- ❌ nicht Phase 15
+- ❌ nicht Dataset Builder
+- ❌ nicht Installationsarchitektur
+- ❌ nicht Updates
+
+Blockiert später:
+
+- ✅ finale Custom Areas
+- ✅ Feuerwehr-Einsatzgebiete
+- ✅ finale 14.4/17.3-Abnahme
+
+Damit ist das Problem **bewusst verschoben**, nicht verloren.
+
+---
+
+# 30. Wichtigste strategische Entscheidung des neuen Masterplans
+
+Der Straßentrainer wird nicht mehr davon abhängig sein, dass irgendein kostenloser Overpass-Server genau in dem Moment erreichbar ist, in dem ein Feuerwehrmitglied eine Stadt installieren möchte.
+
+Statt:
+
+```text
+Benutzer
+↓
+öffentlicher OSM-Abfrageserver
+↓
+hoffentlich verfügbar
+```
+
+haben wir später:
+
+```text
+OSM
+↓
+kontrollierter Build
+↓
+validiertes Straßentrainer-Dataset
+↓
+statische Auslieferung
+↓
+Benutzer
+```
+
+Und gerade weil wir bereits **Package-System, Hashes, IndexedDB, Updates, Offlinebetrieb, POI-Registry und CityContext** gebaut haben, ist der Zeitpunkt für diesen Wechsel sehr günstig.
+
+## Unmittelbar nächster Schritt
+
+Damit ist jetzt eindeutig:
+
+> **Phase 15.0 kurz abschließen → danach Phase 15.1 „Dataset Source Abstraction“.**
+
+Noch **kein Geofabrik/PBF-Umbau im ersten Prompt**.
+
+15.1 schafft zunächst ausschließlich die saubere Schnittstelle, sodass der Straßentrainer nicht mehr wissen muss, ob ein Dataset aus Overpass, einer JSON-Datei oder später unserem PBF-Builder stammt.
+
+**Danach** kommt mit 15.2 der erste echte Test:
+
+> **NRW-PBF → Olpe → Straßentrainer-Paket → Installation → Runde spielen.**
+
+Wenn das funktioniert, haben wir den entscheidenden Beweis, dass der Straßentrainer **Overpass grundsätzlich nicht mehr benötigt**.

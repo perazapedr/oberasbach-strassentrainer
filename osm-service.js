@@ -27,6 +27,11 @@
   const MUNICIPALITY_RESULT_LIMIT = 10;
 
   const OVERPASS_API_URL = "https://overpass-api.de/api/interpreter";
+  const OVERPASS_ENDPOINTS = Object.freeze([
+    OVERPASS_API_URL,
+    "https://overpass.private.coffee/api/interpreter",
+    "https://maps.mail.ru/osm/tools/overpass/api/interpreter"
+  ]);
   const OVERPASS_TIMEOUT_MS = 120000;
   const OVERPASS_QUERY_TIMEOUT_SECONDS = 90;
   const OVERPASS_RETRY_DELAY_MS = 1200;
@@ -934,6 +939,8 @@
         id: areaId,
         cityId,
         name,
+        kind: "administrative",
+        source: "osm",
         adminLevel,
         placeType,
         boundary: boundaryType,
@@ -1452,7 +1459,13 @@
     const AbortControllerImpl = options.AbortController
       || (typeof globalThis !== "undefined" ? globalThis.AbortController : null);
     const endpoint = options.endpoint || NOMINATIM_SEARCH_URL;
-    const overpassEndpoint = options.overpassEndpoint || OVERPASS_API_URL;
+    const configuredOverpassEndpoints = Array.isArray(options.overpassEndpoints)
+      ? options.overpassEndpoints
+      : (options.overpassEndpoint ? [options.overpassEndpoint] : OVERPASS_ENDPOINTS);
+    const overpassEndpoints = [...new Set(configuredOverpassEndpoints
+      .map(value => String(value || "").trim())
+      .filter(Boolean))];
+    if (overpassEndpoints.length === 0) overpassEndpoints.push(OVERPASS_API_URL);
     const timeoutMs = numericOption(options.timeoutMs, NOMINATIM_TIMEOUT_MS, 1);
     const overpassTimeoutMs = numericOption(options.overpassTimeoutMs, OVERPASS_TIMEOUT_MS, 1);
     const overpassQueryTimeoutSeconds = numericOption(
@@ -1616,6 +1629,12 @@
       return error.code === "HTTP_ERROR" && [429, 500, 502, 503, 504].includes(Number(error.status));
     }
 
+    function isFailoverEligibleOverpassError(error) {
+      if (!error || error.code === "ABORTED") return false;
+      if (error.code === "NETWORK_ERROR" || error.code === "TIMEOUT") return true;
+      return error.code === "HTTP_ERROR" && [500, 502, 503, 504].includes(Number(error.status));
+    }
+
     function createChunkRequestLimitError() {
       const error = new Error(`Overpass chunk request limit of ${maxChunkRequests} was reached.`);
       error.name = "DownloadLimitError";
@@ -1642,6 +1661,7 @@
         `endpoint: ${error.endpoint || "UNKNOWN"}`,
         `navigatorOnline: ${error.navigatorOnline !== undefined ? error.navigatorOnline : "unknown"}`,
         `attempt: ${error.attempt || 1}/${error.maxAttempts || 2}`,
+        `failoverUsed: ${Boolean(error.failoverUsed)}`,
         `aborted: ${Boolean(error.aborted)}`,
         "",
         `error.name: ${error.name || "Error"}`,
@@ -1658,68 +1678,91 @@
     async function fetchOverpassElements(query, requestOptions) {
       const { signal, diagnostics, requestKind, onProgress, profiler } = requestOptions;
       const body = new URLSearchParams({ data: query }).toString();
-      for (let attempt = 0; attempt <= MAX_DOWNLOAD_RETRIES; attempt += 1) {
-        throwIfAborted(signal, "Overpass");
-        if (requestKind === "chunk" && diagnostics.chunkRequests >= maxChunkRequests) {
-          throw createChunkRequestLimitError();
-        }
-        diagnostics.requests += 1;
-        if (requestKind === "chunk") diagnostics.chunkRequests += 1;
-        else if (requestKind === "areas") diagnostics.areaRequests = (diagnostics.areaRequests || 0) + 1;
-        else diagnostics.boundaryRequests += 1;
-        try {
-          const rawData = await fetchJsonWithTimeout(overpassEndpoint, {
-            signal,
-            timeout: overpassTimeoutMs,
-            serviceName: "Overpass",
-            method: "POST",
-            headers: {
-              Accept: "application/json",
-              "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8"
-            },
-            body,
-            profiler
-          });
-          return validateOverpassData(rawData);
-        } catch (error) {
-          const isOnline = typeof navigator !== "undefined" && typeof navigator.onLine === "boolean"
-            ? navigator.onLine
-            : true;
-          error.stage = error.stage || (
-            requestKind === "boundary" ? "BOUNDARY"
-            : requestKind === "areas" ? "AREA_DISCOVERY"
-            : (diagnostics.strategy === "chunked" ? "DATA_CHUNK" : "DATA_SINGLE")
-          );
-          error.requestKind = requestKind;
-          error.endpoint = overpassEndpoint;
-          error.method = "POST";
-          error.attempt = attempt + 1;
-          error.maxAttempts = MAX_DOWNLOAD_RETRIES + 1;
-          error.navigatorOnline = isOnline;
-          error.aborted = Boolean(signal && signal.aborted);
-          error.diagnostics = formatOverpassErrorDiagnostics(error);
-
-          if (!isRetryableOverpassError(error) || attempt >= MAX_DOWNLOAD_RETRIES) {
-            if (isRetryableOverpassError(error)) {
-              try { error.retryExhausted = true; } catch (_) {}
-            }
-            throw error;
+      while (diagnostics.endpointIndex < overpassEndpoints.length) {
+        const currentEndpoint = overpassEndpoints[diagnostics.endpointIndex];
+        let endpointError = null;
+        for (let attempt = 0; attempt <= MAX_DOWNLOAD_RETRIES; attempt += 1) {
+          throwIfAborted(signal, "Overpass");
+          if (requestKind === "chunk" && diagnostics.chunkRequests >= maxChunkRequests) {
+            throw createChunkRequestLimitError();
           }
-          diagnostics.retries += 1;
+          diagnostics.requests += 1;
+          if (requestKind === "chunk") diagnostics.chunkRequests += 1;
+          else if (requestKind === "areas") diagnostics.areaRequests = (diagnostics.areaRequests || 0) + 1;
+          else diagnostics.boundaryRequests += 1;
+          try {
+            const rawData = await fetchJsonWithTimeout(currentEndpoint, {
+              signal,
+              timeout: overpassTimeoutMs,
+              serviceName: "Overpass",
+              method: "POST",
+              headers: {
+                Accept: "application/json",
+                "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8"
+              },
+              body,
+              profiler
+            });
+            diagnostics.endpoint = currentEndpoint;
+            if (!diagnostics.endpointsUsed.includes(currentEndpoint)) diagnostics.endpointsUsed.push(currentEndpoint);
+            return validateOverpassData(rawData);
+          } catch (error) {
+            const isOnline = typeof navigator !== "undefined" && typeof navigator.onLine === "boolean"
+              ? navigator.onLine
+              : true;
+            error.stage = error.stage || (
+              requestKind === "boundary" ? "BOUNDARY"
+              : requestKind === "areas" ? "AREA_DISCOVERY"
+              : (diagnostics.strategy === "chunked" ? "DATA_CHUNK" : "DATA_SINGLE")
+            );
+            error.requestKind = requestKind;
+            error.endpoint = currentEndpoint;
+            error.method = "POST";
+            error.attempt = attempt + 1;
+            error.maxAttempts = MAX_DOWNLOAD_RETRIES + 1;
+            error.navigatorOnline = isOnline;
+            error.aborted = Boolean(signal && signal.aborted);
+            error.failoverUsed = diagnostics.failoverUsed;
+            error.diagnostics = formatOverpassErrorDiagnostics(error);
+            endpointError = error;
+
+            if (!isRetryableOverpassError(error) || attempt >= MAX_DOWNLOAD_RETRIES) break;
+            diagnostics.retries += 1;
+            emitProgress(
+              onProgress,
+              "waiting-for-retry",
+              requestKind === "boundary"
+                ? "Die Gemeindegrenze wird gleich erneut angefragt …"
+                : requestKind === "areas"
+                ? "Die Trainingsgebiete werden gleich erneut angefragt …"
+                : "Ein Stadtbereich wird gleich erneut angefragt …",
+              15
+            );
+            await delay(overpassRetryDelayMs, signal);
+          }
+        }
+
+        throwIfAborted(signal, "Overpass");
+        if (isFailoverEligibleOverpassError(endpointError)
+          && diagnostics.endpointIndex + 1 < overpassEndpoints.length) {
+          diagnostics.endpointIndex += 1;
+          diagnostics.endpoint = overpassEndpoints[diagnostics.endpointIndex];
+          diagnostics.failoverUsed = true;
+          diagnostics.failovers += 1;
           emitProgress(
             onProgress,
-            "waiting-for-retry",
-            requestKind === "boundary"
-              ? "Die Gemeindegrenze wird gleich erneut angefragt …"
-              : requestKind === "areas"
-              ? "Die Trainingsgebiete werden gleich erneut angefragt …"
-              : "Ein Stadtbereich wird gleich erneut angefragt …",
+            "switching-overpass-endpoint",
+            "Der OpenStreetMap-Server antwortet momentan nicht. Ein alternativer Datendienst wird versucht …",
             15
           );
-          await delay(overpassRetryDelayMs, signal);
+          continue;
         }
+        if (isRetryableOverpassError(endpointError)) {
+          try { endpointError.retryExhausted = true; } catch (_) {}
+        }
+        throw endpointError;
       }
-      throw new Error("Unreachable Overpass retry state.");
+      throw new Error("Unreachable Overpass endpoint state.");
     }
 
     async function fetchCityData(municipality, downloadOptions = {}) {
@@ -1742,6 +1785,11 @@
       const cityId = `osm-relation-${municipalityInfo.osmId}`;
       const diagnostics = {
         strategy: "pending",
+        endpoint: overpassEndpoints[0],
+        endpointIndex: 0,
+        endpointsUsed: [],
+        failoverUsed: false,
+        failovers: 0,
         initialChunks: 0,
         requests: 0,
         boundaryRequests: 0,
@@ -1939,6 +1987,7 @@
     NOMINATIM_RAW_RESULT_LIMIT,
     MUNICIPALITY_RESULT_LIMIT,
     OVERPASS_API_URL,
+    OVERPASS_ENDPOINTS,
     OVERPASS_TIMEOUT_MS,
     OVERPASS_QUERY_TIMEOUT_SECONDS,
     OVERPASS_RETRY_DELAY_MS,

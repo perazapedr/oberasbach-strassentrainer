@@ -418,6 +418,39 @@ h1 {
   border-color: var(--guess);
 }
 
+.training-area-actions,
+.training-area-editor-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 9px;
+}
+
+.training-area-controls {
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border);
+}
+
+.training-area-controls h3 {
+  margin: 0 0 8px;
+  color: var(--text);
+  font-size: 0.9rem;
+}
+
+.training-area-actions button,
+.training-area-editor-actions button {
+  min-height: 44px;
+  padding: 9px 12px;
+}
+
+.create-training-area-button {
+  width: auto;
+  min-height: 44px;
+  margin: 0;
+  font-size: 0.82rem;
+}
+
 .content-settings {
   display: grid;
   gap: 12px;
@@ -1852,6 +1885,74 @@ body.city-modal-open {
   background: var(--map-background);
 }
 
+.training-area-editor {
+  position: absolute;
+  z-index: 1000;
+  top: 14px;
+  right: 14px;
+  width: min(340px, calc(100% - 28px));
+  max-height: min(52vh, 330px);
+  overflow: auto;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--panel);
+  box-shadow: 0 12px 36px rgba(0, 0, 0, 0.24);
+}
+
+.training-area-editor.drawing {
+  width: min(340px, calc(100% - 28px));
+  padding: 11px 12px;
+}
+
+.training-area-editor label,
+.training-area-editor strong,
+.training-area-editor span,
+.training-area-editor small {
+  display: block;
+  margin: 6px 0;
+}
+
+.training-area-editor small {
+  color: var(--muted);
+  font-size: 0.76rem;
+}
+
+.training-area-editor input,
+.training-area-editor select {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 44px;
+  padding: 9px 11px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  color: var(--text);
+  background: var(--panel);
+  font: inherit;
+}
+
+.training-area-editor p {
+  margin: 10px 0 0;
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+
+.training-area-editor p.error {
+  color: var(--solution);
+}
+
+.training-area-editor .training-area-editor-actions {
+  align-items: center;
+  gap: 6px;
+}
+
+.training-area-editor .training-area-editor-actions button {
+  width: auto;
+  min-height: 36px;
+  padding: 7px 9px;
+  font-size: 0.78rem;
+}
+
 #map {
   position: absolute;
   inset: 0;
@@ -2045,6 +2146,13 @@ body.city-modal-open {
 
   .map-panel {
     min-height: 58vh;
+  }
+
+  .training-area-editor {
+    top: 12px;
+    right: 12px;
+    width: min(340px, calc(100vw - 24px));
+    max-height: min(46vh, 280px);
   }
 }
 

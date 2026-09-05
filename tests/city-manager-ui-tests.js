@@ -1643,7 +1643,7 @@ test("Browser-Assets und Modalstruktur erzwingen den aktuellen Viewport-Vertrag"
   assert.match(html, /styles\.css\?v=\d+(\.\d+)?/);
   assert.match(html, /city-manager-ui\.js\?v=10\.5/);
   assert.match(html, /city-data-validator\.js\?v=10\.0/);
-  assert.match(html, /osm-service\.js\?v=10\.5/);
+  assert.match(html, /osm-service\.js\?v=14\.4a\.1/);
   assert.match(html, /id="citySearchButton"[^>]+type="submit"/);
   assert.match(styles, /\.city-modal-overlay\s*\{[^}]*position:\s*fixed;[^}]*inset:\s*0;[^}]*display:\s*grid;[^}]*place-items:\s*center;/s);
   assert.match(styles, /\.city-manager-dialog\s*\{[^}]*max-height:[^;]+;[^}]*overflow:\s*hidden;/s);

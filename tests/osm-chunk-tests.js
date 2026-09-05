@@ -2,6 +2,7 @@
 
 const assert = require("node:assert/strict");
 const {
+  OVERPASS_API_URL,
   MAX_DOWNLOAD_RETRIES,
   MAX_CHUNK_DEPTH,
   MAX_CHUNK_REQUESTS,
@@ -130,14 +131,18 @@ function chunkedPlan(city = municipality()) {
 }
 
 function createService(fetch, options = {}) {
-  return createOsmService({
+  const serviceOptions = {
     fetch,
     requestIntervalMs: 0,
     overpassRetryDelayMs: 0,
     overpassTimeoutMs: 1000,
     now: () => Date.UTC(2026, 7, 30, 12, 0, 0),
     ...options
-  });
+  };
+  if (!("overpassEndpoint" in options) && !("overpassEndpoints" in options)) {
+    serviceOptions.overpassEndpoints = [OVERPASS_API_URL];
+  }
+  return createOsmService(serviceOptions);
 }
 
 function successfulFetch(dataProvider, calls = []) {
@@ -189,6 +194,11 @@ test("Root-Erfolg benötigt einen Boundary- und einen Datenrequest ohne Split", 
   assert.equal(calls.length, 2);
   assert.deepEqual(result.downloadDiagnostics, {
     strategy: "single",
+    endpoint: OVERPASS_API_URL,
+    endpointIndex: 0,
+    endpointsUsed: [OVERPASS_API_URL],
+    failoverUsed: false,
+    failovers: 0,
     initialChunks: 1,
     requests: 2,
     boundaryRequests: 1,

@@ -6,6 +6,7 @@ const statisticsApi = window.StrassentrainerStatistics;
 const defaultCityApi = window.StrassentrainerDefaultCity;
 const timerApi = window.StrassentrainerTimer;
 const offlineBasemapApi = window.StrassentrainerOfflineBasemap;
+const customTrainingAreaApi = window.StrassentrainerCustomTrainingAreas || null;
 const {
   GAME_STATUS,
   MODE_CONFIGS,
@@ -115,6 +116,20 @@ const els = {
   modeSelect: document.getElementById("modeSelect"),
   trainingAreaFieldGroup: document.getElementById("trainingAreaFieldGroup"),
   trainingAreaSelect: document.getElementById("trainingAreaSelect"),
+  createTrainingAreaButton: document.getElementById("createTrainingAreaButton"),
+  deleteTrainingAreaButton: document.getElementById("deleteTrainingAreaButton"),
+  trainingAreaEditor: document.getElementById("trainingAreaEditor"),
+  trainingAreaEditorSetup: document.getElementById("trainingAreaEditorSetup"),
+  trainingAreaKindSelect: document.getElementById("trainingAreaKindSelect"),
+  trainingAreaNameInput: document.getElementById("trainingAreaNameInput"),
+  startTrainingAreaDrawingButton: document.getElementById("startTrainingAreaDrawingButton"),
+  cancelTrainingAreaEditorButton: document.getElementById("cancelTrainingAreaEditorButton"),
+  trainingAreaDrawingControls: document.getElementById("trainingAreaDrawingControls"),
+  trainingAreaPointCount: document.getElementById("trainingAreaPointCount"),
+  undoTrainingAreaPointButton: document.getElementById("undoTrainingAreaPointButton"),
+  finishTrainingAreaButton: document.getElementById("finishTrainingAreaButton"),
+  cancelTrainingAreaDrawingButton: document.getElementById("cancelTrainingAreaDrawingButton"),
+  trainingAreaEditorMessage: document.getElementById("trainingAreaEditorMessage"),
   timedSettings: document.getElementById("timedSettings"),
   secondsPerRoundSelect: document.getElementById("secondsPerRoundSelect"),
   totalRoundsSelect: document.getElementById("totalRoundsSelect"),
@@ -321,6 +336,8 @@ if (!basemapCoordinator.shouldUseOfflineBasemap()) {
 const solutionLayers = L.featureGroup().addTo(map);
 const answerLayers = L.featureGroup().addTo(map);
 const fireStationLayers = L.featureGroup().addTo(map);
+const activeTrainingAreaLayers = L.featureGroup().addTo(map);
+const trainingAreaEditorLayers = L.featureGroup().addTo(map);
 
 let statisticsStore = statisticsApi.createStatisticsStore(
   localStorage,
@@ -504,6 +521,44 @@ function createAreaLeafletBounds(bounds) {
   };
 }
 
+function normalizedTrainingArea(area) {
+  if (!area || typeof area !== "object") return area;
+  return {
+    ...area,
+    kind: customTrainingAreaApi ? customTrainingAreaApi.areaKind(area) : (area.kind || "administrative"),
+    source: customTrainingAreaApi ? customTrainingAreaApi.areaSource(area) : (area.source || "osm")
+  };
+}
+
+function targetsForTrainingArea(context, area) {
+  if (!area) {
+    return {
+      streets: context.allStreetTargets,
+      pois: context.allPoiTargets,
+      fireStations: context.allFireStations
+    };
+  }
+  if (area.invalid) return { streets: [], pois: [], fireStations: [] };
+  if (customTrainingAreaApi && customTrainingAreaApi.isUserArea(area)) {
+    const membership = customTrainingAreaApi.computeMembership(
+      context.metadata.id,
+      area,
+      context.allStreetTargets,
+      context.allPoiTargets
+    );
+    return {
+      streets: membership.streetTargets,
+      pois: membership.poiTargets,
+      fireStations: context.allFireStations.filter(station => membership.poiIds.has(station.id))
+    };
+  }
+  return {
+    streets: context.allStreetTargets.filter(target => Array.isArray(target.areaIds) && target.areaIds.includes(area.id)),
+    pois: context.allPoiTargets.filter(target => Array.isArray(target.areaIds) && target.areaIds.includes(area.id)),
+    fireStations: context.allFireStations.filter(target => Array.isArray(target.areaIds) && target.areaIds.includes(area.id))
+  };
+}
+
 function buildCityContext(cityData, diagnostics = null) {
   const contextStartedAt = monotonicNow();
   const sourceType = "installed";
@@ -531,7 +586,7 @@ function buildCityContext(cityData, diagnostics = null) {
       throw new Error("Das Stadtpaket enthält einen POI aus einer anderen Stadt.");
     }
   });
-  const areas = Array.isArray(cityData.areas) ? cityData.areas : [];
+  const areas = Array.isArray(cityData.areas) ? cityData.areas.map(normalizedTrainingArea) : [];
   areas.forEach(area => {
     if (area?.cityId !== metadata.id) {
       throw new Error("Das Stadtpaket enthält ein Trainingsgebiet aus einer anderen Stadt.");
@@ -592,28 +647,36 @@ function buildCityContext(cityData, diagnostics = null) {
   let currentPoiTargets = poiTargets;
   let currentFireStations = fireStations;
   let currentLeafletBounds = leafletBounds;
+  let trainingAreaWarning = null;
 
   const savedAreaId = getSavedTrainingAreaId(metadata.id);
   if (savedAreaId && areas.some(a => a.id === savedAreaId)) {
     const foundArea = areas.find(a => a.id === savedAreaId);
-    const filteredStreets = allStreetTargets.filter(
-      s => Array.isArray(s.areaIds) && s.areaIds.includes(foundArea.id)
-    );
-    if (filteredStreets.length >= 1) {
+    const filtered = targetsForTrainingArea({
+      metadata,
+      allStreetTargets,
+      allPoiTargets,
+      allFireStations
+    }, foundArea);
+    if (!foundArea.invalid) {
       activeAreaId = foundArea.id;
       activeArea = foundArea;
-      currentStreetTargets = filteredStreets;
-      currentPoiTargets = allPoiTargets.filter(
-        p => Array.isArray(p.areaIds) && p.areaIds.includes(foundArea.id)
-      );
-      currentFireStations = allFireStations.filter(
-        f => Array.isArray(f.areaIds) && f.areaIds.includes(foundArea.id)
-      );
+      currentStreetTargets = filtered.streets;
+      currentPoiTargets = filtered.pois;
+      currentFireStations = filtered.fireStations;
       if (foundArea.bounds) {
         currentLeafletBounds = createAreaLeafletBounds(foundArea.bounds) || cityLeafletBounds;
       }
     } else {
       setSavedTrainingAreaId(metadata.id, null);
+      trainingAreaWarning = foundArea.invalidReason
+        || `Das bisher aktive Trainingsgebiet „${foundArea.name}“ ist wegen der geänderten Stadtgrenze nicht verfügbar. Gesamte Stadt wurde aktiviert.`;
+    }
+  }
+  if (!trainingAreaWarning) {
+    const unavailableArea = areas.find(area => area && area.invalid);
+    if (unavailableArea) {
+      trainingAreaWarning = `Das eigene Trainingsgebiet „${unavailableArea.name}“ ist wegen der geänderten Stadtgrenze nicht verfügbar und wurde nicht verändert.`;
     }
   }
 
@@ -631,7 +694,8 @@ function buildCityContext(cityData, diagnostics = null) {
     poiTargets: currentPoiTargets,
     poiCategories: categories,
     fireStations: currentFireStations,
-    leafletBounds: currentLeafletBounds
+    leafletBounds: currentLeafletBounds,
+    trainingAreaWarning
   };
   recordRuntimeTiming(diagnostics, "buildCityContextMs", contextStartedAt);
   return context;
@@ -667,6 +731,17 @@ async function loadCityContext(cityId, diagnostics = null) {
     }
   }
   if (!cityData) throw new Error("Die ausgewählte Stadt wurde lokal nicht gefunden.");
+  if (!cityData.city?.boundary && !cityData.boundary
+    && cityId === defaultCityApi.DEFAULT_CITY_ID
+    && typeof defaultCityApi.loadBundledDefaultCity === "function") {
+    try {
+      const bundledCity = await defaultCityApi.loadBundledDefaultCity();
+      if (bundledCity?.boundary) cityData = { ...cityData, boundary: bundledCity.boundary };
+    } catch (_) {
+      // Gameplay remains available; area creation reports the missing boundary explicitly.
+    }
+  }
+  if (customTrainingAreaApi) customTrainingAreaApi.invalidateMembership(cityId);
   const context = buildCityContext(cityData, diagnostics);
   recordRuntimeTiming(diagnostics, "loadCityContextMs", startedAt);
   return context;
@@ -785,6 +860,7 @@ function applyCityContext(
   );
   const markerStartedAt = monotonicNow();
   renderFireStations();
+  renderActiveTrainingAreaBoundary();
   recordRuntimeTiming(diagnostics, "fireStationMarkersMs", markerStartedAt);
   if (offlineBasemap) {
     offlineBasemap.setCityContext(nextContext);
@@ -799,10 +875,12 @@ function applyCityContext(
 function renderTrainingAreaSelect(context) {
   if (!els.trainingAreaSelect || !els.trainingAreaFieldGroup) return;
   const areas = Array.isArray(context?.areas) ? context.areas : [];
+  if (els.createTrainingAreaButton) els.createTrainingAreaButton.disabled = !context?.metadata?.id;
   if (areas.length === 0) {
-    els.trainingAreaFieldGroup.classList.add("hidden");
+    els.trainingAreaFieldGroup.classList.remove("hidden");
     els.trainingAreaSelect.innerHTML = '<option value="">Gesamte Stadt</option>';
     els.trainingAreaSelect.value = "";
+    if (els.deleteTrainingAreaButton) els.deleteTrainingAreaButton.classList.add("hidden");
     return;
   }
   els.trainingAreaFieldGroup.classList.remove("hidden");
@@ -813,13 +891,22 @@ function renderTrainingAreaSelect(context) {
   defaultOption.textContent = "Gesamte Stadt";
   els.trainingAreaSelect.appendChild(defaultOption);
 
-  const topLevel = areas.filter(a => !a.parentId || !areas.some(p => p.id === a.parentId));
+  const administrativeAreas = areas.filter(area => !customTrainingAreaApi || !customTrainingAreaApi.isUserArea(area));
+  const userAreas = areas.filter(area => customTrainingAreaApi && customTrainingAreaApi.isUserArea(area));
+  const topLevel = administrativeAreas.filter(a => !a.parentId || !administrativeAreas.some(p => p.id === a.parentId));
   const childMap = new Map();
-  for (const area of areas) {
-    if (area.parentId && areas.some(p => p.id === area.parentId)) {
+  for (const area of administrativeAreas) {
+    if (area.parentId && administrativeAreas.some(p => p.id === area.parentId)) {
       if (!childMap.has(area.parentId)) childMap.set(area.parentId, []);
       childMap.get(area.parentId).push(area);
     }
+  }
+
+  if (userAreas.length > 0 && administrativeAreas.length > 0) {
+    const administrativeSeparator = document.createElement("option");
+    administrativeSeparator.disabled = true;
+    administrativeSeparator.textContent = "── Administrative Gebiete ──";
+    els.trainingAreaSelect.appendChild(administrativeSeparator);
   }
 
   for (const top of topLevel) {
@@ -837,7 +924,37 @@ function renderTrainingAreaSelect(context) {
     }
   }
 
+  if (userAreas.length > 0) {
+    const separator = document.createElement("option");
+    separator.disabled = true;
+    separator.textContent = "── Eigene Trainingsgebiete ──";
+    els.trainingAreaSelect.appendChild(separator);
+    for (const area of userAreas.sort((a, b) => a.name.localeCompare(b.name, "de", { sensitivity: "base" }))) {
+      const option = document.createElement("option");
+      option.value = area.id;
+      option.disabled = Boolean(area.invalid);
+      const kindLabel = area.kind === "response_area" ? "Einsatzgebiet" : "Freie Region";
+      option.textContent = `${area.name} · ${kindLabel}${area.invalid ? " (nicht verfügbar)" : ""}`;
+      els.trainingAreaSelect.appendChild(option);
+    }
+  }
+
   els.trainingAreaSelect.value = context.activeAreaId || "";
+  if (els.deleteTrainingAreaButton) {
+    const deletable = customTrainingAreaApi && customTrainingAreaApi.isUserArea(context?.activeArea);
+    els.deleteTrainingAreaButton.classList.toggle("hidden", !deletable);
+  }
+}
+
+function renderActiveTrainingAreaBoundary() {
+  activeTrainingAreaLayers.clearLayers();
+  const area = cityContext?.activeArea;
+  const boundary = area && (typeof area.boundary === "object" ? area.boundary : (area.geometry || area.polygon));
+  if (!boundary || typeof L.geoJSON !== "function") return;
+  L.geoJSON({ type: "Feature", properties: {}, geometry: boundary }, {
+    style: { color: "#0067b9", weight: 3, opacity: 0.75, fillColor: "#0067b9", fillOpacity: 0.08 },
+    interactive: false
+  }).addTo(activeTrainingAreaLayers);
 }
 
 function activateTrainingArea(areaId, options = {}) {
@@ -882,17 +999,17 @@ function activateTrainingArea(areaId, options = {}) {
       console.warn(`Trainingsgebiet ${normalizedAreaId} nicht gefunden.`);
       return false;
     }
+    if (targetArea.invalid) {
+      setStatus(targetArea.invalidReason || "Dieses Trainingsgebiet ist wegen einer geänderten Stadtgrenze nicht verfügbar.", "error");
+      if (els.trainingAreaSelect) els.trainingAreaSelect.value = cityContext.activeAreaId || "";
+      return false;
+    }
+    const filtered = targetsForTrainingArea(cityContext, targetArea);
     cityContext.activeAreaId = targetArea.id;
     cityContext.activeArea = targetArea;
-    cityContext.streetTargets = cityContext.allStreetTargets.filter(
-      s => Array.isArray(s.areaIds) && s.areaIds.includes(targetArea.id)
-    );
-    cityContext.poiTargets = cityContext.allPoiTargets.filter(
-      p => Array.isArray(p.areaIds) && p.areaIds.includes(targetArea.id)
-    );
-    cityContext.fireStations = cityContext.allFireStations.filter(
-      f => Array.isArray(f.areaIds) && f.areaIds.includes(targetArea.id)
-    );
+    cityContext.streetTargets = filtered.streets;
+    cityContext.poiTargets = filtered.pois;
+    cityContext.fireStations = filtered.fireStations;
     if (targetArea.bounds) {
       cityContext.leafletBounds = createAreaLeafletBounds(targetArea.bounds) || cityContext.cityLeafletBounds;
     }
@@ -911,6 +1028,7 @@ function activateTrainingArea(areaId, options = {}) {
   contentRepository.poiTargets = cityContext.poiTargets;
 
   renderFireStations();
+  renderActiveTrainingAreaBoundary();
   if (offlineBasemap) {
     offlineBasemap.setTrainingArea(cityContext.activeArea);
   }
@@ -923,6 +1041,7 @@ function activateTrainingArea(areaId, options = {}) {
   if (els.trainingAreaSelect) {
     els.trainingAreaSelect.value = cityContext.activeAreaId || "";
   }
+  renderTrainingAreaSelect(cityContext);
   renderPoiCategoryOptions();
 
   if (gameState.config.mode === "free") {
@@ -936,6 +1055,192 @@ function activateTrainingArea(areaId, options = {}) {
 function handleTrainingAreaChange() {
   if (!els.trainingAreaSelect) return;
   activateTrainingArea(els.trainingAreaSelect.value);
+}
+
+const trainingAreaDrawingState = {
+  active: false,
+  points: [],
+  name: "",
+  kind: "custom"
+};
+const trainingAreaDrawingController = customTrainingAreaApi?.createMapDrawingController
+  && typeof map?.on === "function" && typeof map?.off === "function"
+  ? customTrainingAreaApi.createMapDrawingController(map, { onPoint: addTrainingAreaPoint })
+  : null;
+
+function isTrainingAreaChangeBlocked() {
+  return [GAME_STATUS.ACTIVE, GAME_STATUS.PREPARING].includes(gameState.status) || isExamInProgress();
+}
+
+function setTrainingAreaEditorMessage(message, isError = false) {
+  if (!els.trainingAreaEditorMessage) return;
+  els.trainingAreaEditorMessage.textContent = message || "";
+  els.trainingAreaEditorMessage.classList.toggle("error", Boolean(isError));
+}
+
+function renderTrainingAreaDrawing() {
+  trainingAreaEditorLayers.clearLayers();
+  if (els.trainingAreaPointCount) {
+    const count = trainingAreaDrawingState.points.length;
+    els.trainingAreaPointCount.textContent = `${count} ${count === 1 ? "Punkt gesetzt" : "Punkte gesetzt"}`;
+  }
+  if (els.undoTrainingAreaPointButton) els.undoTrainingAreaPointButton.disabled = trainingAreaDrawingState.points.length === 0;
+  if (els.finishTrainingAreaButton) els.finishTrainingAreaButton.disabled = trainingAreaDrawingState.points.length < 3;
+  if (!trainingAreaDrawingState.active) return;
+  const latLngs = trainingAreaDrawingState.points.map(point => [point[1], point[0]]);
+  if (latLngs.length >= 2 && typeof L.polyline === "function") {
+    L.polyline(latLngs, { color: "#0067b9", weight: 3, dashArray: "7 5" }).addTo(trainingAreaEditorLayers);
+  }
+  if (typeof L.circleMarker === "function") {
+    latLngs.forEach(latLng => L.circleMarker(latLng, {
+      radius: 6, color: "#ffffff", weight: 2, fillColor: "#0067b9", fillOpacity: 1
+    }).addTo(trainingAreaEditorLayers));
+  }
+}
+
+function closeTrainingAreaEditor() {
+  trainingAreaDrawingController?.stop();
+  trainingAreaDrawingState.active = false;
+  trainingAreaDrawingState.points = [];
+  trainingAreaEditorLayers.clearLayers();
+  if (els.trainingAreaEditor) els.trainingAreaEditor.classList.add("hidden");
+  if (els.trainingAreaEditor) els.trainingAreaEditor.classList.remove("drawing");
+  if (els.trainingAreaEditorSetup) els.trainingAreaEditorSetup.classList.remove("hidden");
+  if (els.trainingAreaDrawingControls) els.trainingAreaDrawingControls.classList.add("hidden");
+  setTrainingAreaEditorMessage("");
+  if (cityContext?.leafletBounds) {
+    map.fitBounds(cityContext.leafletBounds, { animate: false, padding: [12, 12] });
+  }
+  if (cityContext && gameState.config.mode === "free") renderIdleGame();
+}
+
+function openTrainingAreaEditor() {
+  if (!cityContext || !customTrainingAreaApi) return false;
+  if (isTrainingAreaChangeBlocked()) {
+    const confirmed = typeof window.confirm === "function" && window.confirm(
+      "Aktuelle Runde beenden?\n\nZum Erstellen eines Trainingsgebiets muss die aktuelle Runde beendet werden."
+    );
+    if (!confirmed) return false;
+    resetGame();
+  }
+  trainingAreaDrawingController?.stop();
+  trainingAreaDrawingState.active = false;
+  trainingAreaDrawingState.points = [];
+  if (els.trainingAreaNameInput) els.trainingAreaNameInput.value = "";
+  if (els.trainingAreaEditorSetup) els.trainingAreaEditorSetup.classList.remove("hidden");
+  if (els.trainingAreaDrawingControls) els.trainingAreaDrawingControls.classList.add("hidden");
+  if (els.trainingAreaEditor) els.trainingAreaEditor.classList.remove("hidden");
+  if (els.trainingAreaEditor) els.trainingAreaEditor.classList.remove("drawing");
+  if (cityContext.cityLeafletBounds) {
+    map.fitBounds(cityContext.cityLeafletBounds, { animate: false, padding: [12, 12] });
+  }
+  setTrainingAreaEditorMessage("Name und Gebietsart festlegen, danach die Eckpunkte auf der Karte setzen.");
+  if (els.trainingAreaNameInput && typeof els.trainingAreaNameInput.focus === "function") els.trainingAreaNameInput.focus();
+  return true;
+}
+
+function startTrainingAreaDrawing() {
+  if (!cityContext || !customTrainingAreaApi) return false;
+  const nameResult = customTrainingAreaApi.validateName(
+    els.trainingAreaNameInput?.value,
+    cityContext.areas
+  );
+  if (!nameResult.valid) {
+    setTrainingAreaEditorMessage(nameResult.message, true);
+    return false;
+  }
+  trainingAreaDrawingState.name = nameResult.name;
+  trainingAreaDrawingState.kind = els.trainingAreaKindSelect?.value || "custom";
+  trainingAreaDrawingState.points = [];
+  trainingAreaDrawingState.active = true;
+  trainingAreaDrawingController?.start();
+  if (cityContext.cityLeafletBounds) {
+    map.fitBounds(cityContext.cityLeafletBounds, { animate: false, padding: [12, 12] });
+  }
+  if (els.trainingAreaEditorSetup) els.trainingAreaEditorSetup.classList.add("hidden");
+  if (els.trainingAreaDrawingControls) els.trainingAreaDrawingControls.classList.remove("hidden");
+  if (els.trainingAreaEditor) els.trainingAreaEditor.classList.add("drawing");
+  setTrainingAreaEditorMessage("");
+  renderTrainingAreaDrawing();
+  return true;
+}
+
+function addTrainingAreaPoint(latlng) {
+  if (!trainingAreaDrawingState.active || !latlng) return false;
+  const coordinate = customTrainingAreaApi?.leafletLatLngToGeoJsonCoordinate(latlng);
+  if (!coordinate) return false;
+  trainingAreaDrawingState.points.push(coordinate);
+  setTrainingAreaEditorMessage("");
+  renderTrainingAreaDrawing();
+  return true;
+}
+
+function undoTrainingAreaPoint() {
+  if (!trainingAreaDrawingState.active || trainingAreaDrawingState.points.length === 0) return false;
+  trainingAreaDrawingState.points.pop();
+  setTrainingAreaEditorMessage("");
+  renderTrainingAreaDrawing();
+  return true;
+}
+
+async function finishTrainingAreaDrawing() {
+  if (!trainingAreaDrawingState.active || !cityContext || !customTrainingAreaApi) return false;
+  try {
+    const area = customTrainingAreaApi.createArea({
+      cityId: cityContext.metadata.id,
+      name: trainingAreaDrawingState.name,
+      kind: trainingAreaDrawingState.kind,
+      points: trainingAreaDrawingState.points,
+      cityBoundary: cityContext.metadata.boundary,
+      existingAreas: cityContext.areas
+    });
+    customTrainingAreaApi.invalidateMembership(cityContext.metadata.id, area.id);
+    const membership = customTrainingAreaApi.computeMembership(
+      cityContext.metadata.id,
+      area,
+      cityContext.allStreetTargets,
+      cityContext.allPoiTargets
+    );
+    area.streetCount = membership.streetTargets.length;
+    area.poiCount = membership.poiTargets.length;
+    const storage = window.StrassentrainerCityStorage;
+    if (!storage || typeof storage.saveArea !== "function") throw new Error("Der lokale Gebiets-Speicher ist nicht verfügbar.");
+    await storage.saveArea(area);
+    cityContext.areas.push(normalizedTrainingArea(area));
+    closeTrainingAreaEditor();
+    activateTrainingArea(area.id, { force: true });
+    const countMessage = `${area.streetCount} spielbare Straßen, ${area.poiCount} POIs.`;
+    setStatus(area.streetCount > 0
+      ? `Trainingsgebiet „${area.name}“ gespeichert. ${countMessage}`
+      : `Trainingsgebiet „${area.name}“ gespeichert. Keine Straßenrunde möglich; ${countMessage}`,
+    area.streetCount === 0 ? "error" : "ready");
+    return area;
+  } catch (error) {
+    setTrainingAreaEditorMessage(error.message || "Das Trainingsgebiet konnte nicht gespeichert werden.", true);
+    return false;
+  }
+}
+
+async function deleteActiveTrainingArea() {
+  const area = cityContext?.activeArea;
+  if (!area || !customTrainingAreaApi?.isUserArea(area)) return false;
+  if (isTrainingAreaChangeBlocked()) {
+    setStatus("Während einer laufenden Runde kann das Trainingsgebiet nicht gelöscht werden.", "error");
+    return false;
+  }
+  const confirmed = typeof window.confirm === "function"
+    ? window.confirm(`Eigenes Trainingsgebiet „${area.name}“ wirklich löschen?`)
+    : false;
+  if (!confirmed) return false;
+  const storage = window.StrassentrainerCityStorage;
+  if (!storage || typeof storage.deleteArea !== "function") return false;
+  await storage.deleteArea(area.id, { userOnly: true });
+  customTrainingAreaApi.invalidateMembership(cityContext.metadata.id, area.id);
+  cityContext.areas = cityContext.areas.filter(candidate => candidate.id !== area.id);
+  activateTrainingArea("", { force: true });
+  renderTrainingAreaSelect(cityContext);
+  setStatus(`Trainingsgebiet „${area.name}“ wurde gelöscht.`, "ready");
+  return true;
 }
 
 function finishRuntimeReady(warning = null) {
@@ -1007,7 +1312,7 @@ async function performCityActivation(cityId, diagnostics = null) {
       }
       throw new Error("Die ausgewählte Stadt konnte nicht aktiviert werden. Die bisherige Stadt bleibt aktiv.", { cause: error });
     }
-    if (activationId === runtimeState.activationId) finishRuntimeReady();
+    if (activationId === runtimeState.activationId) finishRuntimeReady(nextContext.trainingAreaWarning);
     recordRuntimeTiming(diagnostics, "activationTotalMs", activationStartedAt);
     return nextContext;
   };
@@ -1060,7 +1365,7 @@ async function deleteCity(cityId) {
     const nextContext = await loadCityContext(nextCityId);
     if (storage.getActiveCityId?.() !== nextCityId) await storage.setActiveCityId(nextCityId);
     applyCityContext(nextContext, createStatisticsStoreForCityContext(nextContext));
-    finishRuntimeReady();
+    finishRuntimeReady(nextContext.trainingAreaWarning);
     return true;
   };
   const queuedCommit = activationCommitQueue.catch(() => {}).then(commit);
@@ -2406,7 +2711,7 @@ async function initializeApplication() {
     const initial = await loadInitialCityContext();
     const initialStatisticsStore = createStatisticsStoreForCityContext(initial.context);
     applyCityContext(initial.context, initialStatisticsStore);
-    finishRuntimeReady(initial.warning);
+    finishRuntimeReady(initial.warning || initial.context.trainingAreaWarning);
   } catch (error) {
     runtimeState.status = RUNTIME_STATUS.ERROR;
     runtimeState.error = error;
@@ -2511,12 +2816,21 @@ window.STRASSENTRAINER_DEBUG = {
   prepareStreet: nameOrId => prepareStreetForDebug(nameOrId)
 };
 
-map.on("click", event => submitGuess(event.latlng));
+map.on("click", event => {
+  if (!trainingAreaDrawingState.active) submitGuess(event.latlng);
+});
 els.mainButton.addEventListener("click", handleMainButton);
 els.modeSelect.addEventListener("change", handleModeChange);
 if (els.trainingAreaSelect) {
   els.trainingAreaSelect.addEventListener("change", handleTrainingAreaChange);
 }
+if (els.createTrainingAreaButton) els.createTrainingAreaButton.addEventListener("click", openTrainingAreaEditor);
+if (els.deleteTrainingAreaButton) els.deleteTrainingAreaButton.addEventListener("click", deleteActiveTrainingArea);
+if (els.startTrainingAreaDrawingButton) els.startTrainingAreaDrawingButton.addEventListener("click", startTrainingAreaDrawing);
+if (els.cancelTrainingAreaEditorButton) els.cancelTrainingAreaEditorButton.addEventListener("click", closeTrainingAreaEditor);
+if (els.cancelTrainingAreaDrawingButton) els.cancelTrainingAreaDrawingButton.addEventListener("click", closeTrainingAreaEditor);
+if (els.undoTrainingAreaPointButton) els.undoTrainingAreaPointButton.addEventListener("click", undoTrainingAreaPoint);
+if (els.finishTrainingAreaButton) els.finishTrainingAreaButton.addEventListener("click", finishTrainingAreaDrawing);
 els.secondsPerRoundSelect.addEventListener("change", refreshConfigurationAfterSettingsChange);
 els.totalRoundsSelect.addEventListener("change", refreshConfigurationAfterSettingsChange);
 els.contentSelectionSelect.addEventListener("change", handleContentSelectionChange);
@@ -2544,6 +2858,11 @@ window.addEventListener("pagehide", handlePageHide);
 window.addEventListener("beforeunload", handleBeforeUnload);
 window.addEventListener("popstate", handleExamPopState);
 window.addEventListener("keydown", event => {
+  if (event.key === "Escape" && (trainingAreaDrawingState.active
+    || (els.trainingAreaEditor && !els.trainingAreaEditor.classList.contains("hidden")))) {
+    closeTrainingAreaEditor();
+    return;
+  }
   if (event.key === "Enter"
     && !els.mainButton.disabled
     && ![GAME_STATUS.ACTIVE, GAME_STATUS.PREPARING].includes(gameState.status)) {
@@ -2574,10 +2893,19 @@ if (typeof window !== "undefined" && typeof window.addEventListener === "functio
 updateOnlineStatus();
 
 if (typeof navigator !== "undefined" && "serviceWorker" in navigator) {
+  const shouldReloadForServiceWorkerUpdate = Boolean(navigator.serviceWorker.controller);
+  let serviceWorkerReloadStarted = false;
+  navigator.serviceWorker.addEventListener("controllerchange", () => {
+    if (!shouldReloadForServiceWorkerUpdate || serviceWorkerReloadStarted) return;
+    serviceWorkerReloadStarted = true;
+    window.location.reload();
+  });
   window.addEventListener("load", () => {
-    navigator.serviceWorker.register("./sw.js", { scope: "./" }).catch(err => {
-      if (CONFIG.debug) console.warn("Service Worker registration failed:", err);
-    });
+    navigator.serviceWorker.register("./sw.js", { scope: "./" })
+      .then(registration => registration.update())
+      .catch(err => {
+        if (CONFIG.debug) console.warn("Service Worker registration failed:", err);
+      });
   });
 }
 
@@ -2593,6 +2921,14 @@ window.StrassentrainerRuntime = Object.freeze({
   activateTrainingArea,
   getActiveTrainingArea: () => cityContext?.activeArea || null,
   getTrainingAreas: () => (cityContext?.areas ? [...cityContext.areas] : []),
+  createTrainingArea: options => {
+    if (!customTrainingAreaApi || !cityContext) return null;
+    return customTrainingAreaApi.createArea({ ...options, cityId: cityContext.metadata.id, cityBoundary: cityContext.metadata.boundary, existingAreas: cityContext.areas });
+  },
+  getTrainingAreaMembership: areaId => {
+    const area = cityContext?.areas?.find(candidate => candidate.id === areaId);
+    return area ? targetsForTrainingArea(cityContext, area) : null;
+  },
   useOfflineBasemap: (force = true) => basemapCoordinator.setMode(force ? "offline" : "auto"),
   setBasemapMode: mode => basemapCoordinator.setMode(mode),
   getBasemapMode: () => basemapCoordinator.mode,

@@ -15,6 +15,7 @@ const statisticsApi = require("../statistics.js");
 const engineApi = require("../game-engine.js");
 const defaultCityApi = require("../default-city.js");
 const timerApi = require("../timer.js");
+const customTrainingAreaApi = require("../custom-training-area.js");
 
 const APP_PATH = path.join(__dirname, "..", "app.js");
 const APP_SOURCE = fs.readFileSync(APP_PATH, "utf8");
@@ -146,6 +147,11 @@ const ELEMENT_IDS = [
   "distanceValue", "scoreValue", "resultMessage", "roundValue",
   "totalScoreValue", "scorePointsPanel", "statusCard", "statusText", "mapHint",
   "mapPanel", "modeCard", "modeSelect", "trainingAreaFieldGroup", "trainingAreaSelect",
+  "createTrainingAreaButton", "deleteTrainingAreaButton", "trainingAreaEditor",
+  "trainingAreaEditorSetup", "trainingAreaKindSelect", "trainingAreaNameInput",
+  "startTrainingAreaDrawingButton", "cancelTrainingAreaEditorButton",
+  "trainingAreaDrawingControls", "trainingAreaPointCount", "undoTrainingAreaPointButton",
+  "finishTrainingAreaButton", "cancelTrainingAreaDrawingButton", "trainingAreaEditorMessage",
   "timedSettings", "secondsPerRoundSelect",
   "totalRoundsSelect", "contentSelectionSelect", "showTargetCategoryCheckbox",
   "poiCategoryDetails", "poiCategoryOptions", "targetCategoryLabel", "timerPanel",
@@ -181,6 +187,8 @@ function createDocument() {
   elements.statisticsTargetFilter.value = "all";
   elements.statisticsImportStrategy.value = "merge";
   elements.mainButton.disabled = true;
+  elements.trainingAreaEditor.classList.add("hidden");
+  elements.trainingAreaDrawingControls.classList.add("hidden");
 
   const document = {
     body,
@@ -815,6 +823,7 @@ test("10. In-Memory Trainingsgebiet-Wechsel filtert Straßen, POIs und Geräteh�
       StrassentrainerEngine: engineApi,
       StrassentrainerDefaultCity: defaultCityApi,
       StrassentrainerTimer: timerApi,
+      StrassentrainerCustomTrainingAreas: customTrainingAreaApi,
       StrassentrainerCityStorage: storage
     },
     location: { search: "" },
@@ -896,6 +905,7 @@ test("11. Reload stellt zuvor ausgewähltes Trainingsgebiet aus localStorage wie
       StrassentrainerEngine: engineApi,
       StrassentrainerDefaultCity: defaultCityApi,
       StrassentrainerTimer: timerApi,
+      StrassentrainerCustomTrainingAreas: customTrainingAreaApi,
       StrassentrainerCityStorage: storage
     },
     location: { search: "" },
@@ -920,7 +930,7 @@ test("11. Reload stellt zuvor ausgewähltes Trainingsgebiet aus localStorage wie
   assert.match(elements.instruction.textContent, /Köln \(Innenstadt\)/);
 });
 
-test("12. Stadt ohne Trainingsgebiete (Oberasbach) blendet Auswahlfeld vollständig aus", async () => {
+test("12. Stadt ohne zusätzliche Trainingsgebiete zeigt Gesamte Stadt im Selector", async () => {
   const oberasbach = {
     id: "osm-relation-1016396",
     name: "Oberasbach",
@@ -951,6 +961,8 @@ test("12. Stadt ohne Trainingsgebiete (Oberasbach) blendet Auswahlfeld vollstän
     pois: [],
     areas: []
   });
+  const confirmMessages = [];
+  let confirmResult = false;
 
   const sandbox = {
     window: {
@@ -958,7 +970,10 @@ test("12. Stadt ohne Trainingsgebiete (Oberasbach) blendet Auswahlfeld vollstän
       location: { search: "" },
       URLSearchParams,
       localStorage: localStorageMock,
-      confirm: () => true,
+      confirm: message => {
+        confirmMessages.push(message);
+        return confirmResult;
+      },
       addEventListener() {},
       removeEventListener() {},
       setTimeout, clearTimeout, setImmediate, clearImmediate,
@@ -971,6 +986,7 @@ test("12. Stadt ohne Trainingsgebiete (Oberasbach) blendet Auswahlfeld vollstän
       StrassentrainerEngine: engineApi,
       StrassentrainerDefaultCity: defaultCityApi,
       StrassentrainerTimer: timerApi,
+      StrassentrainerCustomTrainingAreas: customTrainingAreaApi,
       StrassentrainerCityStorage: storage
     },
     location: { search: "" },
@@ -988,8 +1004,30 @@ test("12. Stadt ohne Trainingsgebiete (Oberasbach) blendet Auswahlfeld vollstän
   await settle();
   await sandbox.window.StrassentrainerRuntime.ready;
 
-  assert.equal(elements.trainingAreaFieldGroup.classList.contains("hidden"), true);
+  assert.equal(elements.trainingAreaFieldGroup.classList.contains("hidden"), false);
+  assert.match(elements.trainingAreaSelect.innerHTML, /Gesamte Stadt/);
   assert.equal(sandbox.window.StrassentrainerRuntime.getActiveTrainingArea(), null);
+
+  elements.createTrainingAreaButton.click();
+  assert.equal(elements.trainingAreaEditor.classList.contains("hidden"), false);
+  elements.cancelTrainingAreaEditorButton.click();
+  assert.equal(elements.trainingAreaEditor.classList.contains("hidden"), true);
+
+  elements.mainButton.click();
+  await settle();
+  assert.equal(sandbox.window.STRASSENTRAINER_DEBUG.getGameState().status, "active");
+
+  elements.createTrainingAreaButton.click();
+  assert.equal(confirmMessages.length, 1);
+  assert.match(confirmMessages[0], /Aktuelle Runde beenden/);
+  assert.equal(elements.trainingAreaEditor.classList.contains("hidden"), true);
+  assert.equal(sandbox.window.STRASSENTRAINER_DEBUG.getGameState().status, "active");
+
+  confirmResult = true;
+  elements.createTrainingAreaButton.click();
+  assert.equal(confirmMessages.length, 2);
+  assert.equal(sandbox.window.STRASSENTRAINER_DEBUG.getGameState().status, "idle");
+  assert.equal(elements.trainingAreaEditor.classList.contains("hidden"), false);
 });
 
 test("13. Zykluserkennung verhindert Endlosschleifen in der Trainingsgebiet-Hierarchie", () => {

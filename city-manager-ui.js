@@ -10,10 +10,13 @@
   const commonJsPoiCategories = typeof module === "object" && module.exports && typeof require === "function"
     ? require("./poi-categories.js")
     : null;
-  const api = factory(root, commonJsPackage, commonJsUpdate, commonJsPoiCategories);
+  const commonJsCustomAreas = typeof module === "object" && module.exports && typeof require === "function"
+    ? require("./custom-training-area.js")
+    : null;
+  const api = factory(root, commonJsPackage, commonJsUpdate, commonJsPoiCategories, commonJsCustomAreas);
   if (typeof module === "object" && module.exports) module.exports = api;
   if (root) root.StrassentrainerCityManager = api;
-})(typeof globalThis !== "undefined" ? globalThis : this, function createCityManagerApi(root, commonJsPackage, commonJsUpdate, commonJsPoiCategories) {
+})(typeof globalThis !== "undefined" ? globalThis : this, function createCityManagerApi(root, commonJsPackage, commonJsUpdate, commonJsPoiCategories, commonJsCustomAreas) {
   "use strict";
 
   const STATES = Object.freeze({
@@ -237,6 +240,9 @@
     const validator = options.validator || (root && root.StrassentrainerCityDataValidator) || null;
     const packageApi = options.packageApi || (root && root.StrassentrainerCityPackage) || commonJsPackage;
     const updateApi = options.updateApi || (root && root.StrassentrainerCityUpdate) || commonJsUpdate;
+    const customAreasApi = options.customAreasApi
+      || (root && root.StrassentrainerCustomTrainingAreas)
+      || commonJsCustomAreas;
     const AbortControllerClass = options.AbortController
       || (root && root.AbortController)
       || (typeof AbortController !== "undefined" ? AbortController : null);
@@ -1752,6 +1758,29 @@
       }
     }
 
+    function normalizedPackageAreas(packageAreas) {
+      const defaultSource = validatedPackage?.package?.type === "curated" ? "curated" : "osm";
+      return (Array.isArray(packageAreas) ? packageAreas : [])
+        .filter(area => area && area.source !== "user")
+        .map(area => ({
+          ...area,
+          kind: area.kind || "administrative",
+          source: area.source || defaultSource
+        }));
+    }
+
+    async function areasForCityReplacement(cityId, packageAreas, nextBoundary) {
+      const packageOwnedAreas = normalizedPackageAreas(packageAreas);
+      if (typeof storage.getCityAreas !== "function") return packageOwnedAreas;
+      const existingAreas = await storage.getCityAreas(cityId);
+      let userAreas = (Array.isArray(existingAreas) ? existingAreas : [])
+        .filter(area => area && area.source === "user");
+      if (customAreasApi && typeof customAreasApi.revalidateUserAreas === "function") {
+        userAreas = customAreasApi.revalidateUserAreas(userAreas, nextBoundary);
+      }
+      return [...packageOwnedAreas, ...userAreas];
+    }
+
     async function saveValidatedCity() {
       if (phase !== STATES.VALIDATION_RESULT || !validatedPackage || !validatedPackage.valid) return;
       if (!isCityChangeAllowed()) {
@@ -1784,11 +1813,17 @@
             lastOsmCheckAt: nowIso,
             dataVersion: nextVersion
           };
+          const areasToSave = await areasForCityReplacement(
+            cityToSave.id,
+            validatedPackage.areas,
+            cityToSave.boundary || validatedPackage.boundary
+          );
           await storage.saveCity(
             cityToSave,
             validatedPackage.streets,
             validatedPackage.pois,
-            validatedPackage.areas || []
+            areasToSave,
+            { preserveUserAreas: false }
           );
           citySaved = true;
 
@@ -1816,11 +1851,19 @@
         const cityToSave = validatedPackage.boundary && !validatedPackage.city.boundary
           ? { ...validatedPackage.city, boundary: validatedPackage.boundary }
           : validatedPackage.city;
+        const areasToSave = importedAlreadyInstalled
+          ? await areasForCityReplacement(
+            cityToSave.id,
+            validatedPackage.areas,
+            cityToSave.boundary || validatedPackage.boundary
+          )
+          : normalizedPackageAreas(validatedPackage.areas);
         await storage.saveCity(
           cityToSave,
           validatedPackage.streets,
           validatedPackage.pois,
-          validatedPackage.areas || []
+          areasToSave,
+          { preserveUserAreas: false }
         );
         citySaved = true;
         if (workflowSource === "download" || importedActiveCity) {

@@ -1,6 +1,8 @@
 "use strict";
 
 const assert = require("node:assert/strict");
+const fs = require("node:fs");
+const path = require("node:path");
 const {
   NOMINATIM_SEARCH_URL,
   NOMINATIM_COUNTRY_CODE,
@@ -9,6 +11,7 @@ const {
   NOMINATIM_RAW_RESULT_LIMIT,
   MUNICIPALITY_RESULT_LIMIT,
   OVERPASS_API_URL,
+  OVERPASS_ENDPOINTS,
   OVERPASS_TIMEOUT_MS,
   OVERPASS_QUERY_TIMEOUT_SECONDS,
   OVERPASS_RETRY_DELAY_MS,
@@ -155,17 +158,21 @@ function createCityService(elements, options = {}) {
     calls.push({ url, options: fetchOptions });
     return responseWith({ elements });
   });
+  const serviceOptions = {
+    fetch,
+    requestIntervalMs: 0,
+    timeoutMs: 100,
+    overpassTimeoutMs: 100,
+    overpassRetryDelayMs: 0,
+    now: () => Date.UTC(2026, 7, 27, 12, 0, 0),
+    ...options
+  };
+  if (!("overpassEndpoint" in options) && !("overpassEndpoints" in options)) {
+    serviceOptions.overpassEndpoints = [OVERPASS_API_URL];
+  }
   return {
     calls,
-    service: createOsmService({
-      fetch,
-      requestIntervalMs: 0,
-      timeoutMs: 100,
-      overpassTimeoutMs: 100,
-      overpassRetryDelayMs: 0,
-      now: () => Date.UTC(2026, 7, 27, 12, 0, 0),
-      ...options
-    })
+    service: createOsmService(serviceOptions)
   };
 }
 
@@ -177,6 +184,11 @@ test("zentrale Nominatim-Konfiguration", async () => {
   assert.equal(NOMINATIM_RAW_RESULT_LIMIT, 20);
   assert.equal(MUNICIPALITY_RESULT_LIMIT, 10);
   assert.equal(OVERPASS_API_URL, "https://overpass-api.de/api/interpreter");
+  assert.deepEqual(OVERPASS_ENDPOINTS, [
+    "https://overpass-api.de/api/interpreter",
+    "https://overpass.private.coffee/api/interpreter",
+    "https://maps.mail.ru/osm/tools/overpass/api/interpreter"
+  ]);
   assert.equal(OVERPASS_TIMEOUT_MS, 120000);
   assert.equal(OVERPASS_QUERY_TIMEOUT_SECONDS, 90);
   assert.equal(OVERPASS_RETRY_DELAY_MS, 1200);
@@ -1160,6 +1172,173 @@ test("Boundary-Fehler bricht den Stadtdownload sauber ab", async () => {
     assert.equal(error.code, "NETWORK_ERROR");
     return true;
   });
+});
+
+test("Overpass Primary-Erfolg verwendet keinen Fallback", async () => {
+  const urls = [];
+  const { service } = createCityService([], {
+    overpassEndpoints: OVERPASS_ENDPOINTS,
+    fetch: async url => {
+      urls.push(url);
+      return responseWith({ elements: [streetWay(1)] });
+    }
+  });
+  const result = await service.fetchCityData(municipality());
+  assert.ok(urls.every(url => url === OVERPASS_ENDPOINTS[0]));
+  assert.equal(result.downloadDiagnostics.failoverUsed, false);
+  assert.equal(result.downloadDiagnostics.endpoint, OVERPASS_ENDPOINTS[0]);
+});
+
+test("NETWORK_ERROR wird erst auf Primary wiederholt und dann sequenziell per Fallback gelöst", async () => {
+  const calls = [];
+  let active = 0;
+  let maxActive = 0;
+  const { service } = createCityService([], {
+    overpassEndpoints: OVERPASS_ENDPOINTS,
+    fetch: async (url, options) => {
+      active += 1;
+      maxActive = Math.max(maxActive, active);
+      calls.push({ url, body: options.body });
+      active -= 1;
+      if (url === OVERPASS_ENDPOINTS[0]) throw new TypeError("Failed to fetch");
+      return responseWith({ elements: [streetWay(1)] });
+    }
+  });
+  const result = await service.fetchCityData(municipality());
+  assert.deepEqual(calls.map(call => call.url), [
+    OVERPASS_ENDPOINTS[0], OVERPASS_ENDPOINTS[0],
+    OVERPASS_ENDPOINTS[1], OVERPASS_ENDPOINTS[1]
+  ]);
+  assert.equal(calls[0].body, calls[2].body, "Boundary-Body muss beim Failover byte-identisch bleiben");
+  assert.equal(maxActive, 1, "Endpoints dürfen nicht parallel angefragt werden");
+  assert.equal(result.downloadDiagnostics.failoverUsed, true);
+  assert.equal(result.downloadDiagnostics.endpoint, OVERPASS_ENDPOINTS[1]);
+  assert.equal(result.downloadDiagnostics.failovers, 1);
+});
+
+test("Primary und Private.coffee temporär offline wechseln sequenziell zu VK Maps", async () => {
+  const calls = [];
+  let active = 0;
+  let maxActive = 0;
+  const { service } = createCityService([], {
+    overpassEndpoints: OVERPASS_ENDPOINTS,
+    fetch: async (url, options) => {
+      active += 1;
+      maxActive = Math.max(maxActive, active);
+      calls.push({ url, body: options.body, method: options.method, headers: options.headers });
+      active -= 1;
+      if (url !== OVERPASS_ENDPOINTS[2]) throw new TypeError("Temporary endpoint failure");
+      return responseWith({ elements: [streetWay(1)] });
+    }
+  });
+  const result = await service.fetchCityData(municipality());
+  assert.deepEqual(calls.map(call => call.url), [
+    OVERPASS_ENDPOINTS[0], OVERPASS_ENDPOINTS[0],
+    OVERPASS_ENDPOINTS[1], OVERPASS_ENDPOINTS[1],
+    OVERPASS_ENDPOINTS[2], OVERPASS_ENDPOINTS[2]
+  ]);
+  assert.equal(maxActive, 1);
+  assert.equal(calls[0].body, calls[2].body);
+  assert.equal(calls[0].body, calls[4].body);
+  assert.equal(calls[0].method, calls[4].method);
+  assert.deepEqual(calls[0].headers, calls[4].headers);
+  assert.equal(Object.keys(calls[0].headers).some(name => name.toLowerCase() === "user-agent"), false);
+  assert.equal(result.downloadDiagnostics.endpoint, OVERPASS_ENDPOINTS[2]);
+  assert.equal(result.downloadDiagnostics.failovers, 2);
+  assert.equal(result.downloadDiagnostics.failoverUsed, true);
+});
+
+test("Alle drei temporär offline liefern den finalen NETWORK_ERROR des letzten Endpoints", async () => {
+  const urls = [];
+  const { service } = createCityService([], {
+    overpassEndpoints: OVERPASS_ENDPOINTS,
+    fetch: async url => {
+      urls.push(url);
+      throw new TypeError("Failed to fetch");
+    }
+  });
+  await assert.rejects(service.fetchCityData(municipality()), error => {
+    assert.equal(error.code, "NETWORK_ERROR");
+    assert.equal(error.endpoint, OVERPASS_ENDPOINTS[2]);
+    assert.equal(error.attempt, 2);
+    assert.equal(error.failoverUsed, true);
+    return true;
+  });
+  assert.deepEqual(urls, [
+    OVERPASS_ENDPOINTS[0], OVERPASS_ENDPOINTS[0],
+    OVERPASS_ENDPOINTS[1], OVERPASS_ENDPOINTS[1],
+    OVERPASS_ENDPOINTS[2], OVERPASS_ENDPOINTS[2]
+  ]);
+});
+
+test("Produktionscode enthält den ehemaligen Kumi-Endpoint nicht mehr", () => {
+  const source = fs.readFileSync(path.join(__dirname, "..", "osm-service.js"), "utf8");
+  assert.doesNotMatch(source, /overpass\.kumi\.systems/);
+  assert.equal(OVERPASS_ENDPOINTS.some(endpoint => endpoint.includes("overpass.kumi.systems")), false);
+});
+
+for (const scenario of [
+  { name: "TIMEOUT", error: Object.assign(new Error("timeout"), { code: "TIMEOUT" }) },
+  { name: "HTTP 503", response: responseWith({}, 503) }
+]) {
+  test(`${scenario.name} löst nach Primary-Retry den Fallback aus`, async () => {
+    const urls = [];
+    const { service } = createCityService([], {
+      overpassEndpoints: OVERPASS_ENDPOINTS,
+      fetch: async url => {
+        urls.push(url);
+        if (url === OVERPASS_ENDPOINTS[0]) {
+          if (scenario.error) throw Object.assign(new Error(scenario.error.message), { code: scenario.error.code });
+          return scenario.response;
+        }
+        return responseWith({ elements: [streetWay(1)] });
+      }
+    });
+    const result = await service.fetchCityData(municipality());
+    assert.deepEqual(urls.slice(0, 3), [OVERPASS_ENDPOINTS[0], OVERPASS_ENDPOINTS[0], OVERPASS_ENDPOINTS[1]]);
+    assert.equal(result.downloadDiagnostics.endpoint, OVERPASS_ENDPOINTS[1]);
+  });
+}
+
+for (const scenario of [
+  { name: "HTTP 429", status: 429, expectedCalls: 2 },
+  { name: "HTTP 400", status: 400, expectedCalls: 1 }
+]) {
+  test(`${scenario.name} führt zu keinem Mirror-Hopping`, async () => {
+    const urls = [];
+    const { service } = createCityService([], {
+      overpassEndpoints: OVERPASS_ENDPOINTS,
+      fetch: async url => {
+        urls.push(url);
+        return responseWith({}, scenario.status);
+      }
+    });
+    await assert.rejects(service.fetchCityData(municipality()), error => error.status === scenario.status);
+    assert.equal(urls.length, scenario.expectedCalls);
+    assert.ok(urls.every(url => url === OVERPASS_ENDPOINTS[0]));
+  });
+}
+
+test("ABORTED stoppt die gesamte Operation ohne Fallback", async () => {
+  const urls = [];
+  const controller = new AbortController();
+  const { service } = createCityService([], {
+    overpassEndpoints: OVERPASS_ENDPOINTS,
+    overpassTimeoutMs: 1000,
+    fetch: (url, options) => new Promise((resolve, reject) => {
+      urls.push(url);
+      options.signal.addEventListener("abort", () => {
+        const error = new Error("aborted");
+        error.name = "AbortError";
+        reject(error);
+      }, { once: true });
+    })
+  });
+  const download = service.fetchCityData(municipality(), { signal: controller.signal });
+  await new Promise(resolve => setImmediate(resolve));
+  controller.abort();
+  await assert.rejects(download, error => error.code === "ABORTED");
+  assert.deepEqual(urls, [OVERPASS_ENDPOINTS[0]]);
 });
 
 (async () => {

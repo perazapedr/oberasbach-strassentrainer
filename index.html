@@ -8,7 +8,7 @@
 
   <link rel="manifest" href="manifest.webmanifest" />
   <link rel="stylesheet" href="vendor/leaflet/leaflet.css" />
-  <link rel="stylesheet" href="styles.css?v=13.1" />
+  <link rel="stylesheet" href="styles.css?v=14.4a" />
 </head>
 <body>
   <main class="app-shell">
@@ -74,13 +74,6 @@
             </select>
           </div>
 
-          <div id="trainingAreaFieldGroup" class="field-group hidden">
-            <label for="trainingAreaSelect">Trainingsgebiet</label>
-            <select id="trainingAreaSelect">
-              <option value="">Gesamte Stadt</option>
-            </select>
-          </div>
-
           <div id="timedSettings" class="timed-settings hidden">
             <div class="field-group">
               <label for="secondsPerRoundSelect">Zeit pro Aufgabe</label>
@@ -99,6 +92,20 @@
               </select>
             </div>
           </div>
+
+          <section id="trainingAreaControls" class="training-area-controls" aria-labelledby="trainingAreaHeading">
+            <h3 id="trainingAreaHeading">Trainingsgebiet</h3>
+            <div id="trainingAreaFieldGroup" class="field-group">
+              <label class="visually-hidden" for="trainingAreaSelect">Trainingsgebiet auswählen</label>
+              <select id="trainingAreaSelect">
+                <option value="">Gesamte Stadt</option>
+              </select>
+            </div>
+            <div class="training-area-actions">
+              <button id="createTrainingAreaButton" class="secondary-button create-training-area-button" type="button" disabled>+ Gebiet erstellen</button>
+              <button id="deleteTrainingAreaButton" class="secondary-button hidden" type="button">Eigenes Gebiet löschen</button>
+            </div>
+          </section>
 
           <div class="content-settings">
             <div class="field-group">
@@ -291,6 +298,32 @@
 
       <section id="mapPanel" class="map-panel" aria-label="Unbeschriftete Straßenkarte der aktiven Stadt">
         <div id="map"></div>
+        <section id="trainingAreaEditor" class="training-area-editor hidden" aria-label="Trainingsgebiet zeichnen">
+          <div id="trainingAreaEditorSetup">
+            <label for="trainingAreaKindSelect">Art des Gebiets</label>
+            <select id="trainingAreaKindSelect">
+              <option value="response_area">Feuerwehr-Einsatzgebiet</option>
+              <option value="custom">Freie Region</option>
+            </select>
+            <label for="trainingAreaNameInput">Name</label>
+            <input id="trainingAreaNameInput" maxlength="80" autocomplete="off" placeholder="z. B. Prüfungsgebiet Nord" />
+            <div class="training-area-editor-actions">
+              <button id="startTrainingAreaDrawingButton" class="primary-button" type="button">Auf Karte zeichnen</button>
+              <button id="cancelTrainingAreaEditorButton" class="secondary-button" type="button">Abbrechen</button>
+            </div>
+          </div>
+          <div id="trainingAreaDrawingControls" class="hidden">
+            <strong>Gebiet zeichnen</strong>
+            <span id="trainingAreaPointCount">0 Punkte gesetzt</span>
+            <small>Klicken: Punkt setzen · Ziehen: Karte bewegen</small>
+            <div class="training-area-editor-actions">
+              <button id="undoTrainingAreaPointButton" class="secondary-button" type="button">↶ Punkt zurück</button>
+              <button id="finishTrainingAreaButton" class="primary-button" type="button">✓ Fertigstellen</button>
+              <button id="cancelTrainingAreaDrawingButton" class="secondary-button" type="button">Abbrechen</button>
+            </div>
+          </div>
+          <p id="trainingAreaEditorMessage" role="status" aria-live="polite"></p>
+        </section>
         <div class="map-hint" id="mapHint">Karte wird vorbereitet …</div>
         <button id="returnToExamResultsButton" class="map-return-button hidden" type="button">
           Zurück zur Ergebnisübersicht
@@ -435,13 +468,14 @@
   <script src="timer.js?v=6.2"></script>
   <script src="city-storage.js?v=6.2"></script>
   <script src="default-city.js?v=8.0"></script>
-  <script src="osm-service.js?v=10.5"></script>
+  <script src="osm-service.js?v=14.4a.1"></script>
   <script src="city-data-validator.js?v=10.0"></script>
+  <script src="custom-training-area.js?v=14.4a.1"></script>
   <script src="city-package.js?v=9.0"></script>
   <script src="city-update.js?v=14.1"></script>
   <script src="city-manager-ui.js?v=10.5"></script>
   <script src="offline-basemap.js?v=13.2"></script>
   <script src="config.local.js" onerror="window.STRASSENTRAINER_CONFIG = window.STRASSENTRAINER_CONFIG || {}"></script>
-  <script src="app.js?v=8.0"></script>
+  <script src="app.js?v=14.4a.1"></script>
 </body>
 </html>

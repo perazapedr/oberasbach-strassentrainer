@@ -444,20 +444,24 @@
   }
 
   function classifyStreetAgainstBoundary(streetGeometry, boundary, preparedBoundary, profiler) {
+    const effectiveProfiler = profiler && typeof profiler.increment === "function"
+      ? profiler
+      : createProfiler(null);
+    const effectivePreparedBoundary = preparedBoundary || prepareAreaGeometry(boundary);
     let hasInside = false;
     let hasOutside = false;
     for (const line of streetGeometry.coordinates) {
       for (const point of line) {
-        profiler.increment("streetBoundaryPointsTested");
-        if (pointLocationInPreparedGeometry(point, preparedBoundary, profiler) >= 0) hasInside = true;
+        effectiveProfiler.increment("streetBoundaryPointsTested");
+        if (pointLocationInPreparedGeometry(point, effectivePreparedBoundary, effectiveProfiler) >= 0) hasInside = true;
         else hasOutside = true;
       }
     }
     if (hasInside) return hasOutside ? "partial" : "inside";
     for (const line of streetGeometry.coordinates) {
       for (let index = 0; index < line.length - 1; index += 1) {
-        profiler.increment("streetBoundarySegmentsTested");
-        if (segmentIntersectsPreparedGeometry(line[index], line[index + 1], preparedBoundary, profiler)) {
+        effectiveProfiler.increment("streetBoundarySegmentsTested");
+        if (segmentIntersectsPreparedGeometry(line[index], line[index + 1], effectivePreparedBoundary, effectiveProfiler)) {
           return "partial";
         }
       }
@@ -2529,6 +2533,7 @@
     validateCityPackage,
     compareWithCuratedData,
     assignAreasToEntities,
+    classifyStreetAgainstBoundary,
     validateArea: validateImportedArea,
     findAreaParentCycle,
     sha256Hex,
