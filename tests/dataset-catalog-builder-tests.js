@@ -52,11 +52,13 @@ test("Pfadsicherheitsprüfung weist unsichere Pfade hart ab", () => {
 });
 
 test("Catalog Builder erzeugt gültigen Katalog mit Oberasbach und Olpe", () => {
-  const result = buildCatalog({
-    inputs: [OBERASBACH_PATH, OLPE_PATH],
-    output: CATALOG_PATH,
-    generatedAt: "2026-09-06T12:00:00.000Z"
-  });
+  const tmpCatalog = path.join(ROOT, "data/scratch-test-catalog.json");
+  try {
+    const result = buildCatalog({
+      inputs: [OBERASBACH_PATH, OLPE_PATH],
+      output: tmpCatalog,
+      generatedAt: "2026-09-06T12:00:00.000Z"
+    });
 
   assert.equal(result.count, 2);
   const catalog = result.catalog;
@@ -103,6 +105,9 @@ test("Catalog Builder erzeugt gültigen Katalog mit Oberasbach und Olpe", () => 
   assert.equal(olpe.contentHash, "sha256:6c89d676e575f2d69301715c3be5e8e66b5a798afc21b73495671fa33d996269");
   assert.equal(olpe.downloadPath, "cities/de-nw-olpe.json");
   assert.equal(olpe.fileSize, fs.statSync(OLPE_PATH).size);
+  } finally {
+    if (fs.existsSync(tmpCatalog)) fs.unlinkSync(tmpCatalog);
+  }
 });
 
 test("Catalog Builder liefert strikt deterministische Sortierung", () => {

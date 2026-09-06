@@ -928,9 +928,22 @@
         lon: Number(((bounds.west + bounds.east) / 2).toFixed(7))
       };
 
+      if (boundary) {
+        const centerPt = [center.lon, center.lat];
+        if (!pointInPolygonGeometry(centerPt, boundary)) {
+          continue;
+        }
+      }
+
       const adminLevel = tags.admin_level && Number.isInteger(Number(tags.admin_level))
         ? Number(tags.admin_level)
         : null;
+      const muniAdminLevel = municipalityInfo.adminLevel && Number.isInteger(Number(municipalityInfo.adminLevel))
+        ? Number(municipalityInfo.adminLevel)
+        : null;
+      if (adminLevel !== null && muniAdminLevel !== null && adminLevel <= muniAdminLevel) {
+        continue;
+      }
       const placeType = tags.place ? String(tags.place).trim() : null;
       const boundaryType = tags.boundary ? String(tags.boundary).trim() : null;
 
@@ -1021,7 +1034,13 @@
           const inter = boundsIntersectionArea(tierCandidates[i].bounds, tierCandidates[j].bounds);
           const minA = Math.min(boundsArea(tierCandidates[i].bounds), boundsArea(tierCandidates[j].bounds));
           if (minA > 0 && inter / minA > 0.4) {
-            overlapCount += 1;
+            const candA = tierCandidates[i];
+            const candB = tierCandidates[j];
+            const aInB = candA.polygon && pointInPolygonGeometry([candA.center.lon, candA.center.lat], candB.polygon);
+            const bInA = candB.polygon && pointInPolygonGeometry([candB.center.lon, candB.center.lat], candA.polygon);
+            if (aInB || bInA) {
+              overlapCount += 1;
+            }
           }
         }
       }

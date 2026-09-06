@@ -7,8 +7,8 @@ const { spawn } = require("node:child_process");
 
 const ROOT = path.resolve(__dirname, "..");
 const CHROME_PATH = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
-const DEBUG_PORT = 9333;
-const USER_DATA_DIR = `/tmp/chrome-smoke-phase-15-5-${Date.now()}`;
+const DEBUG_PORT = 9335;
+const USER_DATA_DIR = `/tmp/chrome-smoke-phase-15-7-${Date.now()}`;
 
 // MIME types for static server
 const MIME_TYPES = {
@@ -127,7 +127,7 @@ class CdpClient {
     return res.result?.value;
   }
 
-  async waitForFunction(fnStr, maxMs = 15000, intervalMs = 200) {
+  async waitForFunction(fnStr, maxMs = 25000, intervalMs = 200) {
     const start = Date.now();
     while (Date.now() - start < maxMs) {
       try {
@@ -144,8 +144,251 @@ class CdpClient {
   }
 }
 
-async function runSmokeTest() {
-  console.log("=== Starte Phase 15.5 Browser Smoke Test mit Headless Chrome ===");
+async function installAndPlayCity(cdp, cityName, expectedCounts = null) {
+  console.log(`\n--- Teste Installation & Gameplay für "${cityName}" ---`);
+
+  // 1. City Selector öffnen
+  console.log("Öffne City-Selector-Menü...");
+  await cdp.eval(`document.getElementById("citySelectorButton").click()`);
+  await delay(300);
+
+  // 2. Klick auf 'Neue Stadt hinzufügen'
+  console.log("Klicke auf 'Neue Stadt hinzufügen'...");
+  await cdp.eval(`document.getElementById("addCityButton").click()`);
+  await cdp.waitForFunction(`() => {
+    const modal = document.getElementById("cityManagerModalOverlay");
+    return modal && !modal.classList.contains("hidden");
+  }`);
+  console.log("✓ City-Manager-Dialog geöffnet.");
+
+  // 3. Nach Stadt suchen
+  console.log(`Suche im Katalog nach "${cityName}"...`);
+  await cdp.eval(`(() => {
+    const input = document.getElementById("citySearchInput");
+    input.value = ${JSON.stringify(cityName)};
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    document.getElementById("citySearchForm").dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+  })()`);
+
+  // 4. Warte auf Suchergebnis
+  await cdp.waitForFunction(`() => {
+    const results = document.getElementById("citySearchResults");
+    return results && results.children.length > 0 && results.textContent.includes(${JSON.stringify(cityName)});
+  }`);
+  console.log(`✓ "${cityName}" in den Suchergebnissen gefunden.`);
+
+  // 5. Stadt auswählen
+  console.log(`Wähle ${cityName} aus...`);
+  await cdp.eval(`(() => {
+    const results = document.getElementById("citySearchResults");
+    const firstBtn = results.querySelector(".city-search-result");
+    if (firstBtn) firstBtn.click();
+  })()`);
+
+  await cdp.waitForFunction(`() => {
+    const name = document.getElementById("selectedMunicipalityName");
+    const btn = document.getElementById("municipalityActionButton");
+    return name && name.textContent.includes(${JSON.stringify(cityName)}) && btn && !btn.disabled;
+  }`);
+  const buttonText = await cdp.eval(`document.getElementById("municipalityActionButton").textContent.trim()`);
+  console.log(`✓ ${cityName} ausgewählt. Aktionsbutton: "${buttonText}"`);
+
+  // 6. Download starten
+  console.log("Starte Download und Integritätsprüfung...");
+  await cdp.eval(`document.getElementById("municipalityActionButton").click()`);
+
+  // 7. Warte auf Validierungsergebnis (große Städte wie Köln können 5-10s brauchen)
+  await cdp.waitForFunction(`() => {
+    const saveBtn = document.getElementById("saveCityButton");
+    const outcome = document.getElementById("cityValidationOutcome");
+    return saveBtn && !saveBtn.disabled && outcome && outcome.textContent.length > 0;
+  }`, 35000);
+
+  const streetCount = await cdp.eval(`document.getElementById("previewStreetCount").textContent.trim()`);
+  const poiCount = await cdp.eval(`document.getElementById("previewPoiCount").textContent.trim()`);
+  console.log(`✓ Validierung erfolgreich: ${streetCount} Straßen, ${poiCount} POIs.`);
+
+  if (expectedCounts) {
+    if (expectedCounts.streets !== undefined && Number(streetCount) !== expectedCounts.streets) {
+      throw new Error(`Unerwartete Straßenzahl für ${cityName}: erwartet ${expectedCounts.streets}, erhalten ${streetCount}`);
+    }
+    if (expectedCounts.pois !== undefined && Number(poiCount) !== expectedCounts.pois) {
+      throw new Error(`Unerwartete POI-Zahl für ${cityName}: erwartet ${expectedCounts.pois}, erhalten ${poiCount}`);
+    }
+  }
+
+  // 8. Speichern
+  console.log(`Speichere ${cityName} in IndexedDB...`);
+  await cdp.eval(`document.getElementById("saveCityButton").click()`);
+
+  // 9. Warte auf Completed-Panel
+  await cdp.waitForFunction(`() => {
+    const completedPanel = document.getElementById("cityCompletedPanel");
+    return completedPanel && !completedPanel.classList.contains("hidden");
+  }`, 25000);
+  console.log(`✓ ${cityName} erfolgreich in IndexedDB gespeichert.`);
+
+  // 10. Schließe Modal
+  await cdp.eval(`(() => {
+    const closeBtn = document.getElementById("closeCompletedButton");
+    if (closeBtn) closeBtn.click();
+  })()`);
+  await delay(500);
+
+  // 11. Prüfe aktive Stadt im Header
+  const activeCity = await cdp.eval(`document.getElementById("activeCityName").textContent.trim()`);
+  console.log(`Aktive Stadt in der Topbar: "${activeCity}"`);
+  if (!activeCity.includes(cityName)) {
+    throw new Error(`Erwartete aktive Stadt "${cityName}", erhalten: "${activeCity}"`);
+  }
+  console.log(`✓ ${cityName} ist nun die aktive Stadt.`);
+
+  // 12. Starte freie Spielrunde
+  console.log(`Starte freie Trainingsrunde mit ${cityName}...`);
+  await cdp.waitForFunction(`() => {
+    const mainBtn = document.getElementById("mainButton");
+    return mainBtn && !mainBtn.disabled;
+  }`);
+
+  await cdp.eval(`document.getElementById("mainButton").click()`);
+  await delay(500);
+
+  const roundTargetName = await cdp.eval(`(() => {
+    const el = document.getElementById("targetStreet");
+    return el ? el.textContent.trim() : "";
+  })()`);
+  console.log(`Aktuelles Rundenziel in ${cityName}: "${roundTargetName}"`);
+  if (!roundTargetName) {
+    throw new Error(`Kein Rundenziel für ${cityName} generiert!`);
+  }
+  console.log(`✓ Freie Runde in ${cityName} erfolgreich gestartet.`);
+
+  // Stoppe die Runde sauber für den nächsten Test
+  await cdp.eval(`(() => {
+    const btn = document.getElementById("mainButton");
+    if (btn && btn.textContent.includes("Abbrechen")) btn.click();
+  })()`);
+  await delay(300);
+}
+
+async function runOfflineSmokeTest(cdp, port) {
+  console.log("\n===============================================================");
+  console.log("=== STARTE P15-BASELINE-OFFLINE-SMOKE ===");
+  console.log("===============================================================");
+
+  // 1. Olpe online installieren (falls noch nicht aktiv)
+  const currentActive = await cdp.eval(`document.getElementById("activeCityName")?.textContent.trim() || ""`);
+  if (!currentActive.includes("Olpe")) {
+    await installAndPlayCity(cdp, "Olpe", { streets: 461, pois: 114 });
+  }
+
+  // 2. Warte auf ServiceWorker-Registrierung und Vorbereitung
+  console.log("Warte auf aktiven Service Worker...");
+  await cdp.waitForFunction(`() => Boolean(navigator.serviceWorker && navigator.serviceWorker.controller && navigator.serviceWorker.controller.state === "activated")`, 15000);
+  await delay(1000);
+
+  // 3. Emuliere vollständige Offline-Bedingung über Chrome DevTools Protocol
+  console.log("Setze Netzwerk über Chrome DevTools Protocol auf OFFLINE...");
+  await cdp.send("Network.emulateNetworkConditions", {
+    offline: true,
+    latency: 0,
+    downloadThroughput: 0,
+    uploadThroughput: 0
+  });
+
+  // 4. Seite neu laden im Offline-Modus
+  console.log("Führe Seiten-Reload im Offline-Modus durch...");
+  let loadFired = false;
+  cdp.on("Page.loadEventFired", () => { loadFired = true; });
+  await cdp.send("Page.reload");
+
+  const reloadStart = Date.now();
+  while (!loadFired && Date.now() - reloadStart < 15000) {
+    await delay(100);
+  }
+
+  // 5. Warte auf Initialisierung der App aus Cache + IndexedDB
+  console.log("Warte auf Initialisierung aus lokalem Cache und IndexedDB...");
+  await cdp.waitForFunction(`() => {
+    return Boolean(window.StrassentrainerRuntime
+      && typeof window.StrassentrainerRuntime.getActiveCity === "function"
+      && window.StrassentrainerRuntime.getActiveCity()
+      && document.getElementById("mainButton")
+      && !document.getElementById("mainButton").disabled
+      && document.getElementById("activeCityName")
+      && !document.getElementById("activeCityName").textContent.includes("Keine Stadt"));
+  }`, 25000);
+  console.log("✓ Anwendung offline erfolgreich aus Cache initialisiert.");
+
+  // 6. Verifiziere aktive Stadt ist weiterhin Olpe
+  const activeCityOffline = await cdp.eval(`document.getElementById("activeCityName")?.textContent.trim() || ""`);
+  console.log(`Aktive Stadt nach Offline-Reload: "${activeCityOffline}"`);
+  if (!activeCityOffline.includes("Olpe")) {
+    throw new Error(`Offline-Reload verlor aktive Stadt! Erhalten: "${activeCityOffline}"`);
+  }
+  console.log("✓ Olpe erfolgreich aus IndexedDB wiederhergestellt.");
+
+  // 7. Starte freie Runde im Offline-Modus
+  console.log("Starte freie Trainingsrunde offline...");
+  await cdp.eval(`document.getElementById("mainButton").click()`);
+  await delay(500);
+
+  const targetOffline = await cdp.eval(`(() => {
+    const el = document.getElementById("targetStreet");
+    return el ? el.textContent.trim() : "";
+  })()`);
+  console.log(`Offline-Rundenziel in Olpe: "${targetOffline}"`);
+  if (!targetOffline) {
+    throw new Error("Offline-Runde konnte kein Ziel generieren!");
+  }
+
+  // Stoppe Runde
+  await cdp.eval(`(() => {
+    const btn = document.getElementById("mainButton");
+    if (btn && btn.textContent.includes("Abbrechen")) btn.click();
+  })()`);
+
+  // Stelle Online-Status wieder her
+  await cdp.send("Network.emulateNetworkConditions", {
+    offline: false,
+    latency: 0,
+    downloadThroughput: -1,
+    uploadThroughput: -1
+  });
+
+  console.log("===============================================================");
+  console.log("✓ P15-BASELINE-OFFLINE-SMOKE: VOLLSTÄNDIGER PASS!");
+  console.log("===============================================================\n");
+}
+
+async function runSmokeTests() {
+  const args = process.argv.slice(2);
+  const runOffline = args.includes("--offline");
+  const runAll = args.includes("--all") || args.length === 0;
+  let targetCities = [];
+
+  if (runAll) {
+    targetCities = [
+      { name: "Wenden", expected: { streets: 460, pois: 37 } },
+      { name: "Siegen", expected: { streets: 1176, pois: 426 } },
+      { name: "Köln", expected: { streets: 4628, pois: 4453 } }
+    ];
+  } else {
+    for (let i = 0; i < args.length; i++) {
+      if (args[i] === "--city" && args[i + 1]) {
+        targetCities.push({ name: args[++i], expected: null });
+      } else if (!args[i].startsWith("--")) {
+        targetCities.push({ name: args[i], expected: null });
+      }
+    }
+  }
+
+  console.log("=== Starte Phase 15.7 Browser Smoke Tests mit Headless Chrome ===");
+  if (runOffline) {
+    console.log("Modus: P15-BASELINE-OFFLINE-SMOKE");
+  } else {
+    console.log(`Zielstädte: ${targetCities.map(c => c.name).join(", ")}`);
+  }
 
   const { server, port } = await startStaticServer();
   console.log(`Lokaler HTTP-Server läuft auf Port ${port}`);
@@ -214,112 +457,17 @@ async function runSmokeTest() {
     }`, 15000);
     console.log("✓ Anwendung erfolgreich im Browser geladen.");
 
-    // 1. City Selector öffnen
-    console.log("Öffne City-Selector-Menü...");
-    await cdp.eval(`document.getElementById("citySelectorButton").click()`);
-    await delay(300);
-
-    // 2. Klick auf 'Neue Stadt hinzufügen'
-    console.log("Klicke auf 'Neue Stadt hinzufügen'...");
-    await cdp.eval(`document.getElementById("addCityButton").click()`);
-    await cdp.waitForFunction(`() => {
-      const modal = document.getElementById("cityManagerModalOverlay");
-      return modal && !modal.classList.contains("hidden");
-    }`);
-    console.log("✓ City-Manager-Dialog geöffnet.");
-
-    // 3. Nach 'Olpe' suchen
-    console.log("Suche im Katalog nach 'Olpe'...");
-    await cdp.eval(`
-      const input = document.getElementById("citySearchInput");
-      input.value = "Olpe";
-      input.dispatchEvent(new Event("input", { bubbles: true }));
-      document.getElementById("citySearchForm").dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
-    `);
-
-    // 4. Warte auf Suchergebnis
-    await cdp.waitForFunction(`() => {
-      const results = document.getElementById("citySearchResults");
-      return results && results.children.length > 0 && results.textContent.includes("Olpe");
-    }`);
-    console.log("✓ 'Olpe' in den Suchergebnissen gefunden.");
-
-    // 5. Olpe auswählen
-    console.log("Wähle Olpe aus...");
-    await cdp.eval(`
-      const results = document.getElementById("citySearchResults");
-      const firstBtn = results.querySelector(".city-search-result");
-      if (firstBtn) firstBtn.click();
-    `);
-
-    await cdp.waitForFunction(`() => {
-      const name = document.getElementById("selectedMunicipalityName");
-      const btn = document.getElementById("municipalityActionButton");
-      return name && name.textContent.includes("Olpe") && btn && !btn.disabled;
-    }`);
-    const buttonText = await cdp.eval(`document.getElementById("municipalityActionButton").textContent.trim()`);
-    console.log(`✓ Olpe ausgewählt. Aktionsbutton: "${buttonText}"`);
-
-    // 6. Download starten
-    console.log("Starte Download und Integritätsprüfung...");
-    await cdp.eval(`document.getElementById("municipalityActionButton").click()`);
-
-    // 7. Warte auf Validierungsergebnis
-    await cdp.waitForFunction(`() => {
-      const saveBtn = document.getElementById("saveCityButton");
-      const outcome = document.getElementById("cityValidationOutcome");
-      return saveBtn && !saveBtn.disabled && outcome && outcome.textContent.length > 0;
-    }`, 20000);
-
-    const streetCount = await cdp.eval(`document.getElementById("previewStreetCount").textContent.trim()`);
-    const poiCount = await cdp.eval(`document.getElementById("previewPoiCount").textContent.trim()`);
-    console.log(`✓ Validierung erfolgreich: ${streetCount} Straßen, ${poiCount} POIs.`);
-
-    // 8. Speichern
-    console.log("Speichere Stadt in IndexedDB...");
-    await cdp.eval(`document.getElementById("saveCityButton").click()`);
-
-    // 9. Warte auf Completed-Panel
-    await cdp.waitForFunction(`() => {
-      const completedPanel = document.getElementById("cityCompletedPanel");
-      return completedPanel && !completedPanel.classList.contains("hidden");
-    }`);
-    console.log("✓ Stadt erfolgreich gespeichert.");
-
-    // 10. Schließe Modal
-    await cdp.eval(`
-      const closeBtn = document.getElementById("closeCompletedButton");
-      if (closeBtn) closeBtn.click();
-    `);
-    await delay(500);
-
-    // 11. Prüfe aktive Stadt im Header
-    const activeCity = await cdp.eval(`document.getElementById("activeCityName").textContent.trim()`);
-    console.log(`Aktive Stadt in der Topbar: "${activeCity}"`);
-    if (!activeCity.includes("Olpe")) {
-      throw new Error(`Erwartete aktive Stadt "Olpe", erhalten: "${activeCity}"`);
+    // Führe Tests für jede Zielstadt durch
+    for (const { name, expected } of targetCities) {
+      await installAndPlayCity(cdp, name, expected);
     }
-    console.log("✓ Olpe ist nun die aktive Stadt.");
 
-    // 12. Starte eine freie Spielrunde mit Olpe
-    console.log("Starte freie Trainingsrunde mit Olpe...");
-    await cdp.waitForFunction(`() => {
-      const mainBtn = document.getElementById("mainButton");
-      return mainBtn && !mainBtn.disabled;
-    }`);
-    const mainBtnText = await cdp.eval(`document.getElementById("mainButton").textContent.trim()`);
-    console.log(`Main-Button Text vor Klick: "${mainBtnText}"`);
+    // Führe Offline-Smoke durch falls angefordert oder bei Default
+    if (runOffline) {
+      await runOfflineSmokeTest(cdp, port);
+    }
 
-    await cdp.eval(`document.getElementById("mainButton").click()`);
-    await delay(500);
-
-    const roundTargetName = await cdp.eval(`(() => {
-      const el = document.getElementById("targetStreet");
-      return el ? el.textContent.trim() : "";
-    })()`);
-    console.log(`Aktuelles Rundenziel in Olpe: "${roundTargetName}"`);
-
-    // 13. Verifiziere Netzwerk-Metriken
+    // Netzwerk-Audit
     console.log("\n--- NETZWERK-AUDIT ERGEBNIS ---");
     console.log(`Gesamtzahl HTTP-Anfragen:   ${capturedRequests.length}`);
     console.log(`Nominatim-Anfragen:         ${nominatimCount}`);
@@ -337,12 +485,12 @@ async function runSmokeTest() {
     if (catalogRequests === 0) {
       throw new Error("FEHLER: Es wurde keine Katalog-Anfrage registriert!");
     }
-    if (packageRequests === 0) {
+    if (!runOffline && packageRequests === 0) {
       throw new Error("FEHLER: Es wurde keine Stadtpaket-Anfrage registriert!");
     }
 
     console.log("===============================================================");
-    console.log("✓ BROWSER SMOKE TEST ERFOLGREICH BESTANDEN!");
+    console.log("✓ ALLE BROWSER SMOKE TESTS ERFOLGREICH BESTANDEN!");
     console.log("✓ 100% OVERPASS-FREI: Nominatim = 0, Overpass = 0");
     console.log("===============================================================");
   } finally {
@@ -357,7 +505,7 @@ async function runSmokeTest() {
   }
 }
 
-runSmokeTest().catch(err => {
+runSmokeTests().catch(err => {
   console.error("FATAL BROWSER SMOKE TEST ERROR:", err);
   process.exit(1);
 });

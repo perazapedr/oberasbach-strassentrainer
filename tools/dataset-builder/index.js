@@ -15,6 +15,8 @@ function usage() {
     "",
     "Options:",
     "  --relation-id ID   Select an explicit administrative relation",
+    "  --admin-level LEVEL Target admin_level (default: 8)",
+    "  --dataset-id ID    Explicit package / dataset ID",
     "  --report FILE      Write a machine-readable build report",
     "  --state NAME       State metadata (default: Nordrhein-Westfalen)",
     "  --country NAME     Country metadata (default: Deutschland)",
@@ -25,10 +27,11 @@ function usage() {
 }
 
 function parseArgs(argv) {
-  const options = { state: "Nordrhein-Westfalen", country: "Deutschland", verbose: false, keepWork: false };
+  const options = { state: "Nordrhein-Westfalen", country: "Deutschland", verbose: false, keepWork: false, adminLevel: 8 };
   const valueOptions = new Map([
     ["--pbf", "pbf"], ["--municipality", "municipality"], ["--output", "output"],
-    ["--relation-id", "relationId"], ["--report", "report"], ["--state", "state"], ["--country", "country"]
+    ["--relation-id", "relationId"], ["--admin-level", "adminLevel"], ["--dataset-id", "datasetId"],
+    ["--report", "report"], ["--state", "state"], ["--country", "country"]
   ]);
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
@@ -43,6 +46,14 @@ function parseArgs(argv) {
   if (options.relationId !== undefined) {
     options.relationId = Number(options.relationId);
     if (!Number.isSafeInteger(options.relationId) || options.relationId <= 0) throw new Error("--relation-id must be positive integer.");
+  }
+  if (options.adminLevel !== undefined) {
+    options.adminLevel = Number(options.adminLevel);
+    if (!Number.isSafeInteger(options.adminLevel) || options.adminLevel <= 0) throw new Error("--admin-level must be positive integer.");
+  }
+  if (options.datasetId !== undefined) {
+    options.datasetId = String(options.datasetId).trim();
+    if (!options.datasetId) throw new Error("--dataset-id must be non-empty string.");
   }
   return options;
 }
@@ -133,7 +144,7 @@ async function build(options) {
       "tags-filter", "-R", "-f", "opl", options.pbf, "r/boundary=administrative"
     ], options);
     const relation = core.selectMunicipalityRelation(
-      core.parseBoundaryRelationOpl(relationOutput.stdout), options.municipality, options.relationId
+      core.parseBoundaryRelationOpl(relationOutput.stdout), options.municipality, options.relationId, options.adminLevel
     );
 
     phase(`Resolving boundary relation ${relation.id} …`);
@@ -167,6 +178,7 @@ async function build(options) {
       boundary,
       featureCollections: features,
       municipalityName: options.municipality,
+      datasetId: options.datasetId,
       state: options.state,
       country: options.country,
       pbfTimestamp,
@@ -193,6 +205,7 @@ async function build(options) {
       packageBytes: fs.statSync(options.output).size,
       contentHash: assembled.packageData.package.contentHash,
       counts: assembled.diagnostics,
+      areaClassification: assembled.diagnostics.areaClassificationReport || null,
       osmiumWarnings: [boundaryExport.stderr, featureExport.stderr].filter(Boolean).join("\n").trim() || null,
       workDirectory: options.keepWork ? workDir : null
     };

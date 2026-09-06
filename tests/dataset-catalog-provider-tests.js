@@ -73,8 +73,8 @@ test("searchDatasets() findet 'Olpe' und 'Oberasbach' ohne Nominatim/Overpass", 
 
     // 4. Suche nach Bundesland
     const nrwResults = await provider.searchDatasets("Nordrhein-Westfalen");
-    assert.equal(nrwResults.length, 1);
-    assert.equal(nrwResults[0].id, "de-nw-olpe");
+    assert.equal(nrwResults.length, 4);
+    assert.ok(nrwResults.some(r => r.id === "de-nw-olpe"));
 
     // 5. Unbekannte Suche liefert leeres Array
     const unknownResults = await provider.searchDatasets("NichtImKatalogStadt");

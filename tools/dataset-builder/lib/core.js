@@ -59,12 +59,16 @@ function parseBoundaryRelationOpl(text) {
   return candidates;
 }
 
-function selectMunicipalityRelation(candidates, municipality, relationId = null) {
+function selectMunicipalityRelation(candidates, municipality, relationId = null, adminLevel = 8) {
   const expectedName = normalizeText(municipality);
   if (!expectedName) throw new Error("Municipality name is required.");
   const expectedId = relationId === null || relationId === undefined ? null : Number(relationId);
   if (expectedId !== null && (!Number.isSafeInteger(expectedId) || expectedId <= 0)) {
     throw new Error("The explicit relation ID must be a positive integer.");
+  }
+  const expectedLevel = adminLevel === null || adminLevel === undefined ? 8 : Number(adminLevel);
+  if (!Number.isSafeInteger(expectedLevel) || expectedLevel <= 0) {
+    throw new Error("The admin level must be a positive integer.");
   }
 
   const administrative = (Array.isArray(candidates) ? candidates : []).filter(candidate => (
@@ -79,10 +83,10 @@ function selectMunicipalityRelation(candidates, municipality, relationId = null)
   const matching = selectedById.filter(candidate => {
     const tags = candidate.tags;
     const candidateName = tags.name || tags["name:de"];
-    return normalizeText(candidateName) === expectedName && Number(tags.admin_level) === 8;
+    return normalizeText(candidateName) === expectedName && Number(tags.admin_level) === expectedLevel;
   });
   if (matching.length === 0) {
-    throw new Error(`No admin_level=8 municipality boundary named "${municipality}" was found.`);
+    throw new Error(`No admin_level=${expectedLevel} municipality boundary named "${municipality}" was found.`);
   }
   if (matching.length > 1) {
     const details = matching.map(candidate => {
@@ -261,10 +265,128 @@ function copyTags(properties) {
   return tags;
 }
 
-function collectRelevantFeatures(features, boundary, diagnostics = {}) {
+function classifyAreaCandidate(candidate, municipality = {}, boundaryFeature = null) {
+  const { identity, tags, geometry, name } = candidate;
+  const adminLevel = tags.admin_level && Number.isInteger(Number(tags.admin_level))
+    ? Number(tags.admin_level)
+    : null;
+  const placeType = tags.place ? String(tags.place).trim() : null;
+  const boundaryType = tags.boundary ? String(tags.boundary).trim() : null;
+  const isAdministrative = boundaryType === "administrative" && adminLevel !== null;
+  const isPlace = ["borough", "suburb", "quarter"].includes(placeType);
+
+  const report = {
+    id: `${identity.type}:${identity.id}`,
+    name: name || "",
+    osmType: identity.type,
+    osmId: identity.id,
+    adminLevel,
+    category: isPlace ? "place" : (boundaryType || "administrative"),
+    placeType: placeType || null,
+    boundaryType: boundaryType || null,
+    contained: false,
+    ratioInside: 0,
+    centerInside: false,
+    hierarchyMatch: false,
+    decision: "rejected",
+    reason: "REJECTED_UNSUPPORTED_TYPE"
+  };
+
+  if (!name || !["way", "relation"].includes(identity.type) || (!isAdministrative && !isPlace)) {
+    return { accepted: false, report };
+  }
+
+  // Reject target municipality itself
+  if (municipality && identity.type === "relation" && identity.id === municipality.osmId) {
+    report.reason = "REJECTED_TARGET_MUNICIPALITY";
+    return { accepted: false, report };
+  }
+
+  // Hierarchy: admin_level must be strictly greater than municipality admin_level
+  const muniLevel = municipality && municipality.adminLevel ? Number(municipality.adminLevel) : null;
+  if (isAdministrative && muniLevel !== null && adminLevel <= muniLevel) {
+    report.reason = adminLevel === muniLevel ? "REJECTED_SAME_ADMIN_LEVEL" : "REJECTED_HIGHER_ADMIN_LEVEL";
+    return { accepted: false, report };
+  }
+
+  const normalizedGeom = normalizeAreaGeometry(geometry);
+  if (!normalizedGeom) {
+    report.reason = "REJECTED_INVALID_GEOMETRY";
+    return { accepted: false, report };
+  }
+
+  if (!boundaryFeature) {
+    report.contained = true;
+    report.decision = "accepted";
+    report.reason = isPlace ? "ACCEPTED_CONTAINED_PLACE" : "ACCEPTED_CHILD_ADMIN_AREA";
+    report.hierarchyMatch = isAdministrative && muniLevel !== null && adminLevel > muniLevel;
+    return { accepted: true, report, geometry: normalizedGeom };
+  }
+
+  let candidateFeature = null;
+  let candidateArea = 0;
+  try {
+    candidateFeature = turf.feature(normalizedGeom);
+    candidateArea = turf.area(candidateFeature);
+  } catch (_) {
+    report.reason = "REJECTED_INVALID_GEOMETRY";
+    return { accepted: false, report };
+  }
+
+  if (candidateArea <= 0) {
+    report.reason = "REJECTED_INVALID_GEOMETRY";
+    return { accepted: false, report };
+  }
+
+  let intersectionArea = 0;
+  try {
+    const inter = turf.intersect(turf.featureCollection([candidateFeature, boundaryFeature]));
+    if (inter) {
+      intersectionArea = turf.area(inter);
+    }
+  } catch (_) {}
+
+  let centerInside = false;
+  try {
+    const centerCoord = turf.center(candidateFeature).geometry.coordinates;
+    const centerPoint = turf.point(centerCoord);
+    centerInside = turf.booleanPointInPolygon(centerPoint, boundaryFeature, { ignoreBoundary: false });
+  } catch (_) {}
+
+  const ratioInside = candidateArea > 0 ? (intersectionArea / candidateArea) : 0;
+  report.ratioInside = Number(ratioInside.toFixed(4));
+  report.centerInside = centerInside;
+
+  if (intersectionArea <= 0 || ratioInside === 0) {
+    report.reason = "REJECTED_OUTSIDE";
+    return { accepted: false, report };
+  }
+
+  if (ratioInside < 0.05) {
+    report.reason = "REJECTED_TOUCHING_BOUNDARY";
+    return { accepted: false, report };
+  }
+
+  if (ratioInside < 0.85 || !centerInside) {
+    report.reason = "REJECTED_PARTIAL_OVERLAP";
+    return { accepted: false, report };
+  }
+
+  report.contained = true;
+  report.decision = "accepted";
+  report.reason = isPlace ? "ACCEPTED_CONTAINED_PLACE" : "ACCEPTED_CHILD_ADMIN_AREA";
+  report.hierarchyMatch = isAdministrative && muniLevel !== null && adminLevel > muniLevel;
+
+  return { accepted: true, report, geometry: normalizedGeom };
+}
+
+function collectRelevantFeatures(features, boundary, diagnostics = {}, municipality = {}) {
   const streetWays = new Map();
   const poiObjects = new Map();
   const areaObjects = new Map();
+  const areaClassificationReport = [];
+  const boundaryFeature = boundary ? turf.feature(boundary) : null;
+
   diagnostics.featuresRead = 0;
   diagnostics.rawStreetWays = 0;
   diagnostics.eligibleStreetWays = 0;
@@ -275,6 +397,8 @@ function collectRelevantFeatures(features, boundary, diagnostics = {}) {
   diagnostics.poiWays = 0;
   diagnostics.poiRelations = 0;
   diagnostics.rawAreaCandidates = 0;
+  diagnostics.acceptedAreaCandidates = 0;
+  diagnostics.rejectedAreaCandidates = 0;
 
   for (const feature of features) {
     diagnostics.featuresRead += 1;
@@ -312,14 +436,24 @@ function collectRelevantFeatures(features, boundary, diagnostics = {}) {
     }
 
     const adminLevel = Number(tags.admin_level);
-    const areaCandidate = name && ["way", "relation"].includes(identity.type)
-      && ((tags.boundary === "administrative" && [8, 9, 10, 11].includes(adminLevel))
+    const isPotentialArea = name && ["way", "relation"].includes(identity.type)
+      && ((tags.boundary === "administrative" && [7, 8, 9, 10, 11].includes(adminLevel))
         || ["borough", "suburb", "quarter"].includes(tags.place));
-    if (areaCandidate && normalizeAreaGeometry(geometry)) {
+
+    if (isPotentialArea) {
       diagnostics.rawAreaCandidates += 1;
-      areaObjects.set(`${identity.type}:${identity.id}`, { identity, tags, geometry: normalizeAreaGeometry(geometry) });
+      const candidate = { identity, tags, geometry, name };
+      const classification = classifyAreaCandidate(candidate, municipality, boundaryFeature);
+      areaClassificationReport.push(classification.report);
+      if (classification.accepted) {
+        diagnostics.acceptedAreaCandidates += 1;
+        areaObjects.set(`${identity.type}:${identity.id}`, { identity, tags, geometry: classification.geometry });
+      } else {
+        diagnostics.rejectedAreaCandidates += 1;
+      }
     }
   }
+  diagnostics.areaClassificationReport = areaClassificationReport;
   return { streetWays, poiObjects, areaObjects };
 }
 
@@ -449,7 +583,7 @@ function assemblePackage(options) {
     updatedAt: pbfTimestamp
   };
   const diagnostics = {};
-  const collected = collectRelevantFeatures(featureCollections, boundary, diagnostics);
+  const collected = collectRelevantFeatures(featureCollections, boundary, diagnostics, { ...cityBase, osmId: relation.id });
   const streets = buildStreets(collected.streetWays, cityId);
   const pois = buildPois(collected.poiObjects, cityId, diagnostics);
   const areas = buildAreas(collected.areaObjects, { ...cityBase, osmId: relation.id }, boundary);
@@ -467,9 +601,9 @@ function assemblePackage(options) {
   };
   const datasetVersion = (options && options.version) || formatDatasetVersion(pbfTimestamp);
   const packageMeta = {
-    id: municipalityName.toLocaleLowerCase("de-DE") === "olpe" ? "de-nw-olpe" : `osm-relation-${relation.id}`,
+    id: (options && options.datasetId) || (options && options.packageId) || `osm-relation-${relation.id}`,
     type: "osm",
-    datasetKind: "municipality",
+    datasetKind: (options && options.datasetKind) || "municipality",
     version: datasetVersion,
     title: `${city.displayName} – OpenStreetMap-PBF-Dataset`,
     createdAt: pbfTimestamp,
@@ -540,6 +674,7 @@ module.exports = {
   geometryBounds,
   clipLineStringToBoundary,
   collectRelevantFeatures,
+  classifyAreaCandidate,
   buildStreets,
   buildPois,
   areaFeatureToOsmElement,

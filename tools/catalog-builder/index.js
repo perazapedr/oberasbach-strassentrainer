@@ -252,11 +252,17 @@ function buildCatalog(options = {}) {
       inputFiles = [inputPath];
     }
   } else {
-    // Default: Oberasbach und Olpe in data/cities/
-    inputFiles = [
-      path.join(rootDir, "data/cities/oberasbach.json"),
-      path.join(rootDir, "data/cities/de-nw-olpe.json")
+    // Default: Offizielle Pakete in data/cities/
+    const defaultPackages = [
+      "oberasbach.json",
+      "de-nw-olpe.json",
+      "de-nw-wenden.json",
+      "de-nw-siegen.json",
+      "de-nw-koeln.json"
     ];
+    inputFiles = defaultPackages
+      .map(file => path.join(rootDir, "data/cities", file))
+      .filter(file => fs.existsSync(file));
   }
 
   if (inputFiles.length === 0) {
