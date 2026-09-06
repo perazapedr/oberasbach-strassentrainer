@@ -13,10 +13,20 @@
   const commonJsCustomAreas = typeof module === "object" && module.exports && typeof require === "function"
     ? require("./custom-training-area.js")
     : null;
-  const api = factory(root, commonJsPackage, commonJsUpdate, commonJsPoiCategories, commonJsCustomAreas);
+  const commonJsDatasetProvider = typeof module === "object" && module.exports && typeof require === "function"
+    ? require("./dataset-provider.js")
+    : null;
+  const api = factory(
+    root,
+    commonJsPackage,
+    commonJsUpdate,
+    commonJsPoiCategories,
+    commonJsCustomAreas,
+    commonJsDatasetProvider
+  );
   if (typeof module === "object" && module.exports) module.exports = api;
   if (root) root.StrassentrainerCityManager = api;
-})(typeof globalThis !== "undefined" ? globalThis : this, function createCityManagerApi(root, commonJsPackage, commonJsUpdate, commonJsPoiCategories, commonJsCustomAreas) {
+})(typeof globalThis !== "undefined" ? globalThis : this, function createCityManagerApi(root, commonJsPackage, commonJsUpdate, commonJsPoiCategories, commonJsCustomAreas, commonJsDatasetProvider) {
   "use strict";
 
   const STATES = Object.freeze({
@@ -196,6 +206,8 @@
   }
 
   function municipalityCityId(municipality) {
+    const datasetId = asText(municipality && municipality.id);
+    if (datasetId) return datasetId;
     const osmType = asText(municipality && municipality.osmType);
     const osmId = Number(municipality && municipality.osmId);
     if (!osmType || !Number.isSafeInteger(osmId) || osmId <= 0) return null;
@@ -236,7 +248,14 @@
   function createCityManager(options = {}) {
     const documentRef = options.document || (root && root.document) || null;
     const storage = options.storage || (root && root.StrassentrainerCityStorage) || null;
-    const osmService = options.osmService || (root && root.StrassentrainerOsmService) || null;
+    const datasetProviderApi = commonJsDatasetProvider
+      || (root && root.StrassentrainerDatasetProvider)
+      || null;
+    const datasetProvider = options.datasetProvider
+      || (options.osmService && datasetProviderApi
+        && typeof datasetProviderApi.createLegacyOsmDatasetProvider === "function"
+        ? datasetProviderApi.createLegacyOsmDatasetProvider(options.osmService)
+        : (root && root.StrassentrainerDatasetProvider) || null);
     const validator = options.validator || (root && root.StrassentrainerCityDataValidator) || null;
     const packageApi = options.packageApi || (root && root.StrassentrainerCityPackage) || commonJsPackage;
     const updateApi = options.updateApi || (root && root.StrassentrainerCityUpdate) || commonJsUpdate;
@@ -301,7 +320,15 @@
     function requireDependencies() {
       if (!documentRef) throw new Error("CityManager benötigt ein document.");
       if (!storage) throw new Error("StrassentrainerCityStorage ist nicht verfügbar.");
-      if (!osmService) throw new Error("StrassentrainerOsmService ist nicht verfügbar.");
+      if (!datasetProvider) throw new Error("StrassentrainerDatasetProvider ist nicht verfügbar.");
+      if (datasetProviderApi && typeof datasetProviderApi.assertDatasetProvider === "function") {
+        datasetProviderApi.assertDatasetProvider(datasetProvider);
+      } else {
+        const requiredMethods = ["searchDatasets", "getDatasetMetadata", "downloadDataset", "checkForUpdate"];
+        if (requiredMethods.some(method => typeof datasetProvider[method] !== "function")) {
+          throw new Error("StrassentrainerDatasetProvider ist unvollständig.");
+        }
+      }
       if (!validator) throw new Error("StrassentrainerCityDataValidator ist nicht verfügbar.");
       if (!packageApi || typeof packageApi.readCityPackageFile !== "function"
         || typeof packageApi.exportAndDownloadCityPackage !== "function") {
@@ -362,6 +389,11 @@
       } catch (_) {
         return null;
       }
+    }
+
+    function providerRequiresNetwork(operation) {
+      return typeof datasetProvider.requiresNetwork === "function"
+        && datasetProvider.requiresNetwork(operation) === true;
     }
 
     function explainBlockedCityChange() {
@@ -1367,7 +1399,8 @@
         render();
         return;
       }
-      if (typeof navigator !== "undefined" && navigator.onLine === false) {
+      if (providerRequiresNetwork("search")
+        && typeof navigator !== "undefined" && navigator.onLine === false) {
         cancelSearch();
         phase = STATES.ERROR;
         errorContext = "search";
@@ -1396,7 +1429,7 @@
       announce("Gemeinden werden gesucht.");
 
       try {
-        const results = await osmService.searchMunicipalities(query, { signal: searchController.signal });
+        const results = await datasetProvider.searchDatasets(query, { signal: searchController.signal });
         if (operationId !== searchOperationId || !modalOpen || searchController.signal.aborted) return;
         searchResults = Array.isArray(results) ? results : [];
         phase = STATES.SEARCH_RESULTS;
@@ -1534,7 +1567,8 @@
       if ((!retryingFailedDownload && phase !== STATES.MUNICIPALITY_SELECTED)
         || !selectedMunicipality || selectedMunicipalityInstalled) return;
 
-      if (typeof navigator !== "undefined" && navigator.onLine === false) {
+      if (providerRequiresNetwork("download")
+        && typeof navigator !== "undefined" && navigator.onLine === false) {
         cancelDownload({ closing: true });
         phase = STATES.ERROR;
         errorContext = "download";
@@ -1560,7 +1594,8 @@
 
       let validationStarted = false;
       try {
-        const downloaded = await osmService.fetchCityData(selectedMunicipality, {
+        const downloadResult = await datasetProvider.downloadDataset(selectedMunicipality.id, {
+          metadata: selectedMunicipality,
           signal: controller.signal,
           discoverAreas: true,
           onProgress: nextProgress => {
@@ -1574,6 +1609,7 @@
             announce(progress.message);
           }
         });
+        const downloaded = downloadResult && downloadResult.dataset;
         if (operationId !== downloadOperationId || !modalOpen || controller.signal.aborted) return;
         phase = STATES.VALIDATING;
         validationStarted = true;
@@ -1605,7 +1641,7 @@
         render();
         announce(alertMessage);
         if (typeof console !== "undefined" && typeof console.warn === "function") {
-          const diag = error && (error.diagnostics || (typeof osmService?.formatOverpassErrorDiagnostics === "function" && osmService.formatOverpassErrorDiagnostics(error)));
+          const diag = error && (error.diagnostics || (typeof datasetProvider?.formatErrorDiagnostics === "function" && datasetProvider.formatErrorDiagnostics(error)));
           if (diag) console.warn(diag);
         }
       } finally {
@@ -1634,7 +1670,8 @@
         explainBlockedCityChange();
         return;
       }
-      if (typeof navigator !== "undefined" && navigator.onLine === false) {
+      if (providerRequiresNetwork("update")
+        && typeof navigator !== "undefined" && navigator.onLine === false) {
         setHeaderStatus("Für die Aktualisierungsprüfung wird eine Internetverbindung benötigt. Bereits installierte Städte können weiterhin gespielt werden.");
         announce("Für die Aktualisierungsprüfung wird eine Internetverbindung benötigt.");
         if (modalOpen) {
@@ -1653,6 +1690,7 @@
       workflowSource = "update";
       updatingCity = city;
       selectedMunicipality = {
+        id: city.id,
         name: city.name,
         displayName: city.displayName || city.name,
         district: city.district,
@@ -1679,7 +1717,8 @@
 
       let validationStarted = false;
       try {
-        const downloaded = await osmService.fetchCityData(selectedMunicipality, {
+        const updateResult = await datasetProvider.checkForUpdate(city, {
+          metadata: selectedMunicipality,
           signal: controller.signal,
           discoverAreas: true,
           onProgress: nextProgress => {
@@ -1693,6 +1732,7 @@
             announce(progress.message);
           }
         });
+        const downloaded = updateResult && updateResult.dataset;
         if (operationId !== downloadOperationId || !modalOpen || controller.signal.aborted) return;
         phase = STATES.VALIDATING;
         validationStarted = true;

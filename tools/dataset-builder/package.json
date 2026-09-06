@@ -1,0 +1,14 @@
+{
+  "name": "strassentrainer-dataset-builder",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Build-time OSM-PBF dataset builder for the Straßentrainer Olpe proof of concept",
+  "license": "MIT",
+  "scripts": {
+    "build": "node index.js",
+    "test": "node ../../tests/dataset-builder-tests.js"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

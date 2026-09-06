@@ -265,6 +265,10 @@ Eine Geländegeometrie erhält zusätzlich `geometryScope: "site"`, `geometrySou
 
 Nach jeder Datenänderung `node tests/targets-tests.js` ausführen. Der Test prüft unter anderem eindeutige IDs, bekannte Kategorien, Pflichtfelder, Koordinaten, Prüfhinweise und den Ausschluss inaktiver Einträge sowie der Gerätehäuser.
 
+## OSM-PBF-Dataset-Builder
+
+Der Phase-15.2-Proof-of-Concept erzeugt außerhalb des Browsers ein Olpe-Dataset aus einem lokalen Nordrhein-Westfalen-PBF. Einstieg, Systemvoraussetzungen und reproduzierbare Befehle stehen in [`tools/dataset-builder/README.md`](tools/dataset-builder/README.md). Die Web-App lädt ausschließlich das fertige Schema-1-Package und enthält keinen PBF-Parser.
+
 ## Lokal testen
 
 Da das gebündelte JSON-Paket per `fetch()` geladen wird, die App über einen kleinen lokalen Entwicklungsserver öffnen:
@@ -294,6 +298,10 @@ node tests/city-manager-ui-tests.js
 node tests/multi-city-integration-tests.js
 node tests/oberasbach-migration-tests.js
 node tests/city-package-tests.js
+node tests/dataset-provider-tests.js
+node tests/dataset-provider-integration-tests.js
+node tests/dataset-builder-tests.js
+node tests/olpe-pbf-integration-tests.js
 ```
 
 Die Tests decken Straßen- und POI-Geometrien, den lokalen Datenbestand, alle Engine-Zustände, Ergebnisfelder, Moduskonfigurationen, dauerhafte Statistik und den vollständigen Freien Modus ab. Die Integration prüft außerdem ausgeblendete Kategorien, gespeicherte Inhaltswahl und die Balance des gemischten Modus. Für den Zeitmodus werden insbesondere Tipp in der ersten Sekunde, Tipp kurz vor Ablauf, Ablauf ohne Tipp, ein simulierter Hintergrund-Zeitsprung, genau ein aktiver Timer, zehn aufeinanderfolgende Runden, Wiederholung und vorzeitiger Abbruch geprüft. Der Prüfungsmodus wird mit zehn vollständigen Aufgaben, einem Timeout, unterdrückter Zwischenauflösung, Abschlussliste, Karten-Nachprüfung, Statistiktrennung sowie Warnungen bei Reload, Zurücknavigation und Abbruch getestet. Separate Grenzwerttests prüfen 64,99 %, 65 %, 75 %, 85 %, 95 %, 99,99 % und exakt 100 % sowie die alternative Medaillendarstellung.
@@ -359,6 +367,7 @@ Alle Dateipfade sind relativ aufgebaut und funktionieren deshalb auch in einem P
 - `city-storage.js`: transaktionaler lokaler Stadtspeicher
 - `city-data-validator.js`: Daten- und Stadtpaketvalidierung
 - `city-package.js`: Stadt-Export, Stadt-Import, Dateinamen und Sicherheitsgrenzen
+- `dataset-provider.js`: neutrale Dataset-Quellenschnittstelle mit Legacy-OSM- und lokalem Static Provider
 - `city-manager-ui.js`: zentrale Oberfläche zur Stadtverwaltung
 - `data/cities/oberasbach.json`: gebündeltes kuratiertes Default-Stadtpaket
 - `data/cities/oberasbach-geometries.json`: geprüfte lokale Eingabe für den reproduzierbaren Paket-Build
@@ -375,6 +384,8 @@ Alle Dateipfade sind relativ aufgebaut und funktionieren deshalb auch in einem P
 - `tests/multi-city-integration-tests.js`: CityContext-Wechsel, Bounds, Marker und stadtbezogene Statistik
 - `tests/oberasbach-migration-tests.js`: vollständige Phase-8-Daten-, Bootstrap- und Statistikmigration
 - `tests/city-package-tests.js`: Phase-9-Format, Sicherheitsfehler, Atomizität und semantische Roundtrips
+- `tests/dataset-provider-tests.js`: Provider-Contract, Normalisierung, Legacy-Delegation, Fehler und Abort
+- `tests/dataset-provider-integration-tests.js`: lokale Static-Dataset-Installation über Validator und IndexedDB ohne Nominatim/Overpass
 - `.nojekyll`: verhindert eine unnötige Jekyll-Verarbeitung bei GitHub Pages
 
 ## Kartenarchitektur & Offline-Betrieb
@@ -388,6 +399,6 @@ Für Phase 14.4b muss die derzeitige Annahme „installierter Datensatz = genau 
 - **Online**: Gewohntes, detailreiches Kartenbild über den beschriftungsfreien CARTO-Kachelstil (`_nolabels`).
 - **Offline**: Autarke lokale Orientierungskarte über einen performanten Canvas-Vektorlayer (`offline-basemap.js`), der die in IndexedDB gespeicherten Straßengeometrien und Gemeindegrenzen ohne externe Kacheln und ohne Netzwerkzugriff rendert. Bei Netzausfall oder Kachelfehlern schaltet die Anwendung automatisch auf die lokale Vektor-Basiskarte um.
 
-Die Installation zusätzlicher Städte verwendet bei bestehender Internetverbindung Nominatim und Overpass. Das eigentliche Spiel liest Straßen, POIs und Geometrien ausschließlich lokal aus IndexedDB und funktioniert offline vollständig ohne externe Server.
+Der City Manager spricht seit Phase 15.1 ausschließlich mit einem `DatasetProvider`. Der produktive Standardprovider kapselt weiterhin den bestehenden Nominatim-/Overpass-Pfad; ein austauschbarer Static Provider belegt zusätzlich die lokale Installation ohne diese Dienste. Das eigentliche Spiel liest Straßen, POIs und Geometrien ausschließlich lokal aus IndexedDB und funktioniert offline vollständig ohne externe Server.
 
 Kartendaten © OpenStreetMap-Mitwirkende, ODbL. Kartenstil © CARTO.

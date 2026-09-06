@@ -1,0 +1,85 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<osm version="0.6" generator="strassentrainer-test" upload="false">
+  <bounds minlat="50.99" minlon="6.99" maxlat="51.05" maxlon="7.05"/>
+  <node id="1" lat="51.0000" lon="7.0000"/>
+  <node id="2" lat="51.0000" lon="7.0400"/>
+  <node id="3" lat="51.0400" lon="7.0400"/>
+  <node id="4" lat="51.0400" lon="7.0000"/>
+  <node id="10" lat="51.0100" lon="7.0050"/>
+  <node id="11" lat="51.0100" lon="7.0200"/>
+  <node id="12" lat="51.0100" lon="7.0350"/>
+  <node id="13" lat="51.0200" lon="6.9900"/>
+  <node id="14" lat="51.0200" lon="7.0200"/>
+  <node id="15" lat="51.0200" lon="7.0500"/>
+  <node id="16" lat="51.0250" lon="7.0050"/>
+  <node id="17" lat="51.0250" lon="7.0150"/>
+  <node id="18" lat="51.0300" lon="7.0220"/>
+  <node id="19" lat="51.0350" lon="7.0320"/>
+  <node id="20" lat="51.0050" lon="7.0300"/>
+  <node id="21" lat="51.0150" lon="7.0300"/>
+  <node id="22" lat="51.0300" lon="7.0080"/>
+  <node id="23" lat="51.0360" lon="7.0140"/>
+  <node id="30" lat="51.0120" lon="7.0260"/>
+  <node id="31" lat="51.0120" lon="7.0300"/>
+  <node id="32" lat="51.0160" lon="7.0300"/>
+  <node id="33" lat="51.0160" lon="7.0260"/>
+  <node id="40" lat="51.0260" lon="7.0260"/>
+  <node id="41" lat="51.0260" lon="7.0320"/>
+  <node id="42" lat="51.0320" lon="7.0320"/>
+  <node id="43" lat="51.0320" lon="7.0260"/>
+  <node id="50" lat="51.0000" lon="7.0200"/>
+  <node id="51" lat="51.0400" lon="7.0200"/>
+  <node id="300" lat="51.0080" lon="7.0080">
+    <tag k="amenity" v="fire_station"/>
+    <tag k="name" v="Feuerwehr Testolpe"/>
+  </node>
+  <node id="311" lat="51.0140" lon="7.0280">
+    <tag k="amenity" v="school"/>
+    <tag k="name" v="Grundschule Testolpe"/>
+  </node>
+  <way id="101"><nd ref="1"/><nd ref="2"/><tag k="boundary" v="administrative"/></way>
+  <way id="102"><nd ref="2"/><nd ref="3"/><tag k="boundary" v="administrative"/></way>
+  <way id="103"><nd ref="3"/><nd ref="4"/><tag k="boundary" v="administrative"/></way>
+  <way id="104"><nd ref="4"/><nd ref="1"/><tag k="boundary" v="administrative"/></way>
+  <way id="200">
+    <nd ref="10"/><nd ref="11"/>
+    <tag k="highway" v="residential"/><tag k="name" v="Hauptstraße"/><tag k="alt_name" v="Alte Hauptstraße"/>
+  </way>
+  <way id="201">
+    <nd ref="11"/><nd ref="12"/>
+    <tag k="highway" v="residential"/><tag k="name" v="Hauptstraße"/><tag k="short_name" v="Hauptstr."/>
+  </way>
+  <way id="202"><nd ref="13"/><nd ref="14"/><nd ref="15"/><tag k="highway" v="primary"/><tag k="name" v="Grenzweg"/></way>
+  <way id="203"><nd ref="16"/><nd ref="17"/><tag k="highway" v="living_street"/><tag k="name" v="Nebenweg"/></way>
+  <way id="204"><nd ref="18"/><nd ref="19"/><tag k="highway" v="tertiary"/><tag k="name" v="Marktstraße"/></way>
+  <way id="205"><nd ref="20"/><nd ref="21"/><tag k="highway" v="secondary"/><tag k="name" v="Bahnhofstraße"/></way>
+  <way id="206"><nd ref="22"/><nd ref="23"/><tag k="highway" v="service"/><tag k="name" v="Serviceweg"/></way>
+  <way id="310">
+    <nd ref="30"/><nd ref="31"/><nd ref="32"/><nd ref="33"/><nd ref="30"/>
+    <tag k="amenity" v="school"/><tag k="name" v="Grundschule Testolpe"/>
+  </way>
+  <way id="401"><nd ref="40"/><nd ref="41"/><nd ref="42"/><nd ref="43"/><nd ref="40"/></way>
+  <way id="510"><nd ref="1"/><nd ref="50"/><nd ref="51"/><nd ref="4"/><nd ref="1"/></way>
+  <way id="511"><nd ref="50"/><nd ref="2"/><nd ref="3"/><nd ref="51"/><nd ref="50"/></way>
+  <relation id="100">
+    <member type="way" ref="101" role="outer"/><member type="way" ref="102" role="outer"/>
+    <member type="way" ref="103" role="outer"/><member type="way" ref="104" role="outer"/>
+    <tag k="type" v="boundary"/><tag k="boundary" v="administrative"/><tag k="admin_level" v="8"/>
+    <tag k="name" v="Testolpe"/><tag k="de:amtlicher_gemeindeschluessel" v="05966024"/>
+  </relation>
+  <relation id="400">
+    <member type="way" ref="401" role="outer"/>
+    <tag k="type" v="multipolygon"/><tag k="tourism" v="hotel"/><tag k="name" v="Hotel Testblick"/>
+  </relation>
+  <relation id="500">
+    <member type="way" ref="510" role="outer"/>
+    <tag k="type" v="boundary"/><tag k="boundary" v="administrative"/><tag k="admin_level" v="9"/><tag k="name" v="Testolpe-West"/>
+  </relation>
+  <relation id="501">
+    <member type="way" ref="511" role="outer"/>
+    <tag k="type" v="boundary"/><tag k="boundary" v="administrative"/><tag k="admin_level" v="9"/><tag k="name" v="Testolpe-Ost"/>
+  </relation>
+  <relation id="900">
+    <tag k="type" v="boundary"/><tag k="boundary" v="administrative"/><tag k="admin_level" v="6"/><tag k="name" v="Testolpe"/>
+  </relation>
+</osm>

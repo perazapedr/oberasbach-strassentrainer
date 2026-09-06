@@ -6,3 +6,10 @@ config.local.js
 Thumbs.db
 .vscode/
 .idea/
+
+# Phase 15.2: lokale OSM-PBF-Quellen und Builder-Arbeitsdaten
+*.osm.pbf
+tools/dataset-builder/work/
+tools/dataset-builder/output/
+tools/dataset-builder/reports/*.json
+!tools/dataset-builder/test/fixtures/*.osm.pbf

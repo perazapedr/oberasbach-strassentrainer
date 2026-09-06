@@ -93,7 +93,7 @@ test("4. Service Worker definiert saubere Cache-Version und alle App-Shell-Datei
   const sw = require("../sw.js");
 
   assert.ok(sw.STATIC_CACHE.startsWith("strassentrainer-static-"), "Cache-Name muss strassentrainer-static- Präfix tragen");
-  assert.equal(sw.STATIC_CACHE, "strassentrainer-static-v9");
+  assert.equal(sw.STATIC_CACHE, "strassentrainer-static-v10");
   assert.ok(Array.isArray(sw.STATIC_ASSETS), "STATIC_ASSETS muss ein Array sein");
   assert.ok(sw.STATIC_ASSETS.length >= 20, "STATIC_ASSETS muss alle Kern-Dateien umfassen");
 
@@ -115,7 +115,7 @@ test("4. Service Worker definiert saubere Cache-Version und alle App-Shell-Datei
     "index.html", "styles.css", "app.js", "geometry.js", "poi-categories.js", "targets.js",
     "statistics.js", "game-engine.js", "timer.js", "city-storage.js",
     "city-data-validator.js", "city-package.js", "city-manager-ui.js",
-    "default-city.js", "osm-service.js", "offline-basemap.js", "manifest.webmanifest",
+    "default-city.js", "osm-service.js", "dataset-provider.js", "offline-basemap.js", "manifest.webmanifest",
     "data/cities/oberasbach.json", "vendor/leaflet/leaflet.js",
     "vendor/leaflet/leaflet.css", "vendor/turf/turf.min.js"
   ];

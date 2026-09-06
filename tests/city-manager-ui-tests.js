@@ -523,6 +523,7 @@ async function setup(options = {}) {
     document: documentRef,
     storage: storageFixture.storage,
     osmService,
+    datasetProvider: options.datasetProvider,
     validator,
     packageApi: options.packageApi,
     setTimeout: callback => callback()
@@ -695,6 +696,47 @@ test("bewusste Suche ruft Nominatim exakt einmal mit getrimmtem Query auf", asyn
   assert.equal(fixture.serviceCalls.search.length, 1);
   assert.equal(fixture.serviceCalls.search[0].query, "Oberasbach");
   assert.ok(fixture.serviceCalls.search[0].options.signal);
+});
+
+test("injizierter DatasetProvider entkoppelt Suche und Installation vollständig vom OSM-Service", async () => {
+  const providerCalls = { search: 0, download: 0 };
+  const candidate = {
+    id: "osm-relation-1016396",
+    name: "Providerstadt",
+    displayName: "Providerstadt",
+    datasetKind: "municipality",
+    provider: "test"
+  };
+  const fixture = await setup({
+    datasetProvider: {
+      requiresNetwork: () => false,
+      async searchDatasets(query) {
+        providerCalls.search += 1;
+        assert.equal(query, "Providerstadt");
+        return [candidate];
+      },
+      async getDatasetMetadata() { return candidate; },
+      async downloadDataset(datasetId) {
+        providerCalls.download += 1;
+        assert.equal(datasetId, candidate.id);
+        return { datasetId, metadata: candidate, dataset: downloadedPackage() };
+      },
+      async checkForUpdate() { return null; }
+    }
+  });
+  await openAndSearch(fixture, "Providerstadt");
+  findByClass(fixture.element("citySearchResults"), "city-search-result")[0].click();
+  await tick();
+  fixture.element("municipalityActionButton").click();
+  await tick();
+  fixture.element("saveCityButton").click();
+  await tick();
+
+  assert.deepEqual(providerCalls, { search: 1, download: 1 });
+  assert.equal(fixture.serviceCalls.search.length, 0);
+  assert.equal(fixture.serviceCalls.download.length, 0);
+  assert.equal(fixture.storageFixture.calls.saveCity.length, 1);
+  assert.equal(fixture.manager.getState().phase, "completed");
 });
 
 test("Klick auf den echten Submit-Button startet Suche und sichtbaren Pending-State", async () => {
@@ -1665,7 +1707,9 @@ test("UI-Modul enthält weder direkte IndexedDB-Manipulation noch Netzwerk-Downl
   assert.doesNotMatch(source, /indexedDB|\.transaction\s*\(|objectStore\s*\(/);
   assert.doesNotMatch(source, /fetch\s*\(|overpass-api|\belements\s*\[/i);
   assert.match(source, /storage\.saveCity/);
-  assert.match(source, /osmService\.fetchCityData/);
+  assert.match(source, /datasetProvider\.downloadDataset/);
+  assert.match(source, /datasetProvider\.searchDatasets/);
+  assert.doesNotMatch(source, /osmService\.fetchCityData|osmService\.searchMunicipalities/);
 });
 
 test("CityManager enthält keine veralteten Phase-6-Übergangstexte", () => {

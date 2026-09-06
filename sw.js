@@ -1,9 +1,9 @@
 /**
  * Straßentrainer - Service Worker
- * Phase 14.4a: Karteneditor-/Overpass-Stabilisierung
+ * Phase 15.1: Dataset-Source-Abstraktion
  */
 
-const STATIC_CACHE = "strassentrainer-static-v9";
+const STATIC_CACHE = "strassentrainer-static-v10";
 
 const STATIC_ASSETS = [
   "./",
@@ -24,6 +24,7 @@ const STATIC_ASSETS = [
   "city-manager-ui.js",
   "default-city.js",
   "osm-service.js",
+  "dataset-provider.js",
   "offline-basemap.js",
   "manifest.webmanifest",
   "data/cities/oberasbach.json",
