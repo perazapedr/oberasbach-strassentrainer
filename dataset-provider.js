@@ -343,9 +343,10 @@
       return { raw: data, map, list: Array.from(new Set(map.values())) };
     }
 
-    async function loadCatalog(signal) {
+    async function loadCatalog(signal, loadOptions = {}) {
       throwIfAborted(signal);
-      if (cachedCatalog && !opts.noCache) return cachedCatalog;
+      const shouldReload = Boolean(loadOptions && loadOptions.reload);
+      if (cachedCatalog && !opts.noCache && !shouldReload) return cachedCatalog;
 
       if (typeof opts.loadCatalog === "function") {
         try {
@@ -468,7 +469,7 @@
       if (!id) {
         throw new DatasetProviderError("DATASET_NOT_FOUND", "Dataset-ID fehlt.", { provider: providerId });
       }
-      const catalog = await loadCatalog(metadataOptions.signal);
+      const catalog = await loadCatalog(metadataOptions.signal, metadataOptions);
       throwIfAborted(metadataOptions.signal);
 
       const entry = catalog.map.get(id);
@@ -576,32 +577,51 @@
       }
       const id = asText(installedDataset.package && installedDataset.package.id)
         || asText(installedDataset.id)
-        || asText(installedDataset.city && installedDataset.city.id);
+        || asText(installedDataset.city && installedDataset.city.id)
+        || asText(installedDataset.cityId)
+        || osmDatasetId(installedDataset);
       if (!id) {
         throw new DatasetProviderError("DATASET_NOT_FOUND", "Installiertes Dataset besitzt keine gültige ID.", { provider: providerId });
       }
 
-      const catalogEntry = await getDatasetMetadata(id, updateOptions);
+      const shouldReload = updateOptions.reload !== false;
+      const catalogEntry = await getDatasetMetadata(id, { ...updateOptions, reload: shouldReload });
+      throwIfAborted(updateOptions.signal);
+
       const currentVersion = asText(installedDataset.package && installedDataset.package.version)
+        || asText(installedDataset.city && installedDataset.city.package && installedDataset.city.package.version)
         || asText(installedDataset.version);
-      const latestVersion = asText(catalogEntry.version);
+      const latestVersion = asText(catalogEntry && catalogEntry.version);
 
-      if (!currentVersion || !latestVersion) {
-        return {
-          hasUpdate: false,
-          currentVersion: currentVersion || null,
-          latestVersion: latestVersion || null,
-          metadata: catalogEntry
-        };
+      if (!currentVersion) {
+        throw new DatasetProviderError(
+          "INVALID_VERSION",
+          "Installiertes Dataset besitzt keine gültige Versionsangabe.",
+          { provider: providerId }
+        );
+      }
+      if (!latestVersion) {
+        throw new DatasetProviderError(
+          "INVALID_VERSION",
+          "Katalogeintrag besitzt keine gültige Versionsangabe.",
+          { provider: providerId }
+        );
       }
 
-      let hasUpdate = false;
+      let comparison = 0;
       try {
-        const comparison = comparePackageVersions(latestVersion, currentVersion);
-        hasUpdate = comparison > 0;
-      } catch (_) {
-        hasUpdate = latestVersion !== currentVersion;
+        comparison = comparePackageVersions(latestVersion, currentVersion);
+      } catch (error) {
+        throw new DatasetProviderError(
+          "INVALID_VERSION",
+          `Versionsvergleich fehlgeschlagen: ${error && error.message ? error.message : error}`,
+          { cause: error, provider: providerId }
+        );
       }
+
+      // comparison > 0 means latestVersion is strictly newer than currentVersion.
+      // comparison <= 0 means up to date or older (downgrade not offered).
+      const hasUpdate = comparison > 0;
 
       return {
         hasUpdate,
@@ -622,7 +642,8 @@
       searchDatasets,
       getDatasetMetadata,
       downloadDataset,
-      checkForUpdate
+      checkForUpdate,
+      reloadCatalog: () => { cachedCatalog = null; }
     });
   }
 

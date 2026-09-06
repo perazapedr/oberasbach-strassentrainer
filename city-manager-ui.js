@@ -70,19 +70,43 @@
       return "Die Stadtsuche ist momentan nicht erreichbar. Bereits installierte Städte können weiterhin gespielt werden.";
     }
     if (context === "validation") {
+      if (code === "CATALOG_HASH_MISMATCH" || code === "PACKAGE_HASH_MISMATCH") {
+        return "Integritätsprüfung fehlgeschlagen: Die Prüfsumme des Datenpakets stimmt nicht überein. Es wurde nichts gespeichert.";
+      }
+      if (code === "PACKAGE_INVALID") {
+        return "Das heruntergeladene Datenpaket ist ungültig oder beschädigt. Es wurde nichts gespeichert.";
+      }
       return "Die heruntergeladenen Stadtdaten konnten nicht sicher verwendet werden. Es wurde nichts gespeichert.";
     }
-    if (context === "storage") {
+    if (context === "storage" || code === "STORAGE_FAILED") {
       return "Die Stadt konnte nicht lokal gespeichert werden. Bitte versuche es erneut und prüfe, ob ausreichend lokaler Speicher verfügbar ist.";
     }
     if (context === "update") {
       if (!isOnline) {
         return "Du bist momentan offline.\n\nFür die Prüfung von Aktualisierungen wird eine Internetverbindung benötigt. Bereits installierte Städte können weiterhin gespielt werden.";
       }
+      if (code === "CATALOG_UNAVAILABLE") {
+        return "Updates konnten momentan nicht geprüft werden. Der Dataset-Katalog ist nicht erreichbar.";
+      }
+      if (code === "DATASET_NOT_FOUND") {
+        return "Für dieses Dataset ist derzeit kein Online-Update verfügbar.";
+      }
+      if (code === "INVALID_VERSION") {
+        return "Die Versionsinformation des Datasets ist ungültig. Update konnte nicht geprüft werden.";
+      }
+      if (code === "DOWNLOAD_FAILED") {
+        return "Das Update-Paket konnte nicht heruntergeladen werden.";
+      }
+      if (code === "CATALOG_HASH_MISMATCH" || code === "PACKAGE_HASH_MISMATCH") {
+        return "Integritätsprüfung fehlgeschlagen: Die Prüfsumme des Datenpakets stimmt nicht überein. Es wurde nichts geändert.";
+      }
+      if (code === "PACKAGE_INVALID") {
+        return "Das Update-Paket ist ungültig oder beschädigt. Es wurde nichts geändert.";
+      }
       if (code === "TIMEOUT") {
         return "Die Prüfung auf Aktualisierungen hat zu lange gedauert. Bitte versuche es erneut.";
       }
-      return "Der OpenStreetMap-Datendienst konnte für die Aktualisierungsprüfung nicht erreicht werden. Bitte versuche es später erneut.";
+      return "Aktualisierungen konnten momentan nicht geprüft werden. Bitte versuche es später erneut.";
     }
     if (context !== "download") {
       return "Der Stadtvorgang konnte nicht abgeschlossen werden. Bitte versuche es erneut.";
@@ -330,6 +354,7 @@
     let activatingCompletedCity = false;
     let updatingCity = null;
     let updateDiff = null;
+    let updateCheckResult = null;
     let importOperationId = 0;
     const exportingCityIds = new Set();
     let canChangeCity = typeof options.canChangeCity === "function" ? options.canChangeCity : () => true;
@@ -666,10 +691,11 @@
       const context = municipalityContext(city, true);
       if (context) elements.cityPreviewMetadata.appendChild(documentRef.createTextNode(` · ${context}`));
       elements.cityPreviewMetadata.appendChild(makeElement("br"));
-      const currentVer = updatingCity?.dataVersion || city?.dataVersion || 1;
+      const currentVer = updateCheckResult?.currentVersion || updatingCity?.package?.version || updatingCity?.dataVersion || city?.package?.version || city?.dataVersion || 1;
       const currentStand = updatingCity?.updatedAt || updatingCity?.createdAt || city?.updatedAt || city?.createdAt;
+      const sourceLabel = isCurated ? "Kuratiert" : (packageData?.package?.source || updatingCity?.package?.source || "Katalog");
       elements.cityPreviewMetadata.appendChild(documentRef.createTextNode(
-        `Installierte Version: ${currentVer}${currentStand ? ` (${formatDate(currentStand)})` : ""} · Quelle: ${isCurated ? "Kuratiert" : "OpenStreetMap"}`
+        `Installierte Version: ${currentVer}${currentStand ? ` (${formatDate(currentStand)})` : ""} · Quelle: ${sourceLabel}`
       ));
 
       elements.previewCategoryCounts.replaceChildren();
@@ -685,7 +711,7 @@
         elements.cityValidationOutcome.appendChild(makeElement(
           "p",
           "city-validation-success",
-          "Die installierte Stadt entspricht dem aktuell geladenen OSM-Stand."
+          `Die installierte Stadt ist auf dem neuesten Stand (${currentVer}).`
         ));
         if (diff && diff.summary) {
           const s = diff.summary;
@@ -703,9 +729,12 @@
       }
 
       // Changes exist
+      const nextVer = packageData?.package?.version || updateCheckResult?.latestVersion || "";
       const headingText = isCurated
         ? `OpenStreetMap-Vergleich für ${municipalityName(city)}`
-        : `Neue OSM-Daten für ${municipalityName(city)} gefunden`;
+        : (nextVer
+          ? `Update für ${municipalityName(city)} verfügbar (${currentVer} → ${nextVer})`
+          : `Neue OSM-Daten für ${municipalityName(city)} gefunden`);
       elements.cityValidationOutcome.appendChild(makeElement("h3", "", headingText));
 
       if (isCurated) {
@@ -1211,6 +1240,7 @@
       activatingCompletedCity = false;
       updatingCity = null;
       updateDiff = null;
+      updateCheckResult = null;
       if (elements) {
         elements.citySearchInput.value = "";
         elements.cityImportFileInput.value = "";
@@ -1759,8 +1789,8 @@
         announce("Für die Aktualisierungsprüfung wird eine Internetverbindung benötigt.");
         if (modalOpen) {
           phase = STATES.ERROR;
-          errorContext = "download";
-          alertMessage = "Für die Aktualisierungsprüfung wird eine Internetverbindung benötigt.\n\nBereits installierte Städte können weiterhin gespielt werden.";
+          errorContext = "update";
+          alertMessage = getUserFriendlyCityError({ code: "NETWORK_ERROR", navigatorOnline: false }, "update");
           render();
         }
         return;
@@ -1773,7 +1803,7 @@
       workflowSource = "update";
       updatingCity = city;
       selectedMunicipality = {
-        id: city.id,
+        id: city.package?.id || city.id,
         name: city.name,
         displayName: city.displayName || city.name,
         district: city.district,
@@ -1789,18 +1819,19 @@
       const controller = new AbortControllerClass();
       downloadController = controller;
       phase = STATES.DOWNLOADING;
-      progress = { stage: "preparing", message: "Aktueller OpenStreetMap-Stand wird angefragt …", progress: 0 };
+      progress = { stage: "checking", message: "Katalog wird auf Aktualisierungen geprüft …", progress: 0 };
       alertMessage = "";
       noticeMessage = "";
       validatedPackage = null;
       updateDiff = null;
+      updateCheckResult = null;
       warningDetailsExpanded = false;
       render();
-      announce(`${municipalityName(city)} wird gegen OpenStreetMap geprüft.`);
+      announce(`${municipalityName(city)} wird auf Aktualisierungen geprüft.`);
 
       let validationStarted = false;
       try {
-        const updateResult = await datasetProvider.checkForUpdate(city, {
+        const updateCheck = await datasetProvider.checkForUpdate(city, {
           metadata: selectedMunicipality,
           signal: controller.signal,
           discoverAreas: true,
@@ -1815,15 +1846,91 @@
             announce(progress.message);
           }
         });
-        const downloaded = updateResult && updateResult.dataset;
+        if (operationId !== downloadOperationId || !modalOpen || controller.signal.aborted) return;
+        updateCheckResult = updateCheck;
+
+        let downloaded = null;
+        if (updateCheck && updateCheck.dataset) {
+          // Legacy Provider: Daten wurden bereits in checkForUpdate geladen
+          downloaded = updateCheck.dataset;
+        } else if (!updateCheck || !updateCheck.hasUpdate) {
+          // Catalog Provider: Kein Update verfügbar
+          phase = STATES.VALIDATION_RESULT;
+          render();
+          announce(elements.cityValidationOutcome?.textContent || "Keine Aktualisierung erforderlich.");
+          return;
+        } else {
+          // Catalog Provider: Update verfügbar -> Paket herunterladen
+          phase = STATES.DOWNLOADING;
+          progress = { stage: "downloading", message: "Neues Datenpaket wird heruntergeladen …", progress: 20 };
+          render();
+          announce(`${municipalityName(city)} wird heruntergeladen …`);
+
+          const datasetId = (updateCheck.metadata && updateCheck.metadata.id) || selectedMunicipality.id;
+          const downloadResult = await datasetProvider.downloadDataset(datasetId, {
+            signal: controller.signal,
+            onProgress: nextProgress => {
+              if (operationId !== downloadOperationId || phase !== STATES.DOWNLOADING || !modalOpen) return;
+              progress = {
+                stage: asText(nextProgress && nextProgress.stage),
+                message: asText(nextProgress && nextProgress.message) || "Download läuft …",
+                progress: clampProgress(nextProgress && nextProgress.progress)
+              };
+              render();
+              announce(progress.message);
+            }
+          });
+          downloaded = downloadResult && downloadResult.dataset;
+        }
+
         if (operationId !== downloadOperationId || !modalOpen || controller.signal.aborted) return;
         phase = STATES.VALIDATING;
         validationStarted = true;
         render();
         announce("Die heruntergeladenen Stadtdaten werden geprüft.");
 
+        if (!downloaded || typeof downloaded !== "object") {
+          const err = new Error("Das heruntergeladene Datenpaket ist ungültig.");
+          err.code = "PACKAGE_INVALID";
+          throw err;
+        }
+
+        // 1. Catalog ↔ Package contentHash check & SHA-256 (nur für Pakete mit Metadaten)
+        if (downloaded.package || updateCheck?.metadata?.contentHash) {
+          const catalogHash = asText(updateCheck?.metadata?.contentHash).toLowerCase().replace(/^sha256:/, "");
+          const declaredHash = asText(downloaded?.package?.contentHash).toLowerCase().replace(/^sha256:/, "");
+          if (catalogHash && declaredHash && catalogHash !== declaredHash) {
+            const err = new Error(`Integritätsprüfung fehlgeschlagen: Katalog-Hash (${catalogHash}) stimmt nicht mit Paket-Hash (${declaredHash}) überein.`);
+            err.code = "CATALOG_HASH_MISMATCH";
+            throw err;
+          }
+
+          // 2. Cryptographic recomputation: verifyPackageHash
+          if (typeof validator.verifyPackageHash === "function" && downloaded?.package) {
+            const hashCheck = validator.verifyPackageHash(downloaded);
+            if (!hashCheck.valid) {
+              const err = new Error("Die berechnete Prüfsumme stimmt nicht mit dem Datenpaket überein.");
+              err.code = "PACKAGE_HASH_MISMATCH";
+              throw err;
+            }
+          }
+        }
+
+        // 3. Package contract validation: validateCityPackage
+        let packageValidation = null;
+        if (typeof validator.validateCityPackage === "function" && downloaded?.package) {
+          packageValidation = validator.validateCityPackage(downloaded);
+        }
+
+        // 4. City data validation: validateCityData
         const result = validator.validateCityData(downloaded, { sourceMode: "download" });
-        if (operationId !== downloadOperationId || !modalOpen || controller.signal.aborted) return;
+        if (packageValidation && !packageValidation.valid && result) {
+          result.valid = false;
+          if (!result.validation) result.validation = { municipality: { errors: [] } };
+          if (packageValidation.validation?.municipality?.errors && result.validation?.municipality?.errors) {
+            result.validation.municipality.errors.push(...packageValidation.validation.municipality.errors);
+          }
+        }
         if (!result || !result.valid) {
           phase = STATES.ERROR;
           errorContext = "validation";
@@ -1831,6 +1938,13 @@
           render();
           announce(alertMessage);
           return;
+        }
+
+        if (downloaded.package && result) {
+          result.package = downloaded.package;
+          if (result.city && !result.city.package) {
+            result.city.package = downloaded.package;
+          }
         }
         validatedPackage = result;
 
@@ -1847,14 +1961,6 @@
         const diff = updateApi.compareCityVersions(currentData, result);
         updateDiff = diff;
 
-        if (!diff.summary.hasChanges) {
-          try {
-            const nowIso = new Date().toISOString();
-            await storage.updateCityMetadata(city.id, { lastOsmCheckAt: nowIso });
-            city.lastOsmCheckAt = nowIso;
-          } catch (_) {}
-        }
-
         phase = STATES.VALIDATION_RESULT;
         render();
         announce(diff.summary.hasChanges
@@ -1870,10 +1976,8 @@
           return;
         }
         phase = STATES.ERROR;
-        errorContext = validationStarted ? "validation" : "download";
-        alertMessage = errorContext === "validation"
-          ? getUserFriendlyCityError(error, "validation")
-          : getUserFriendlyCityError(error, "download");
+        errorContext = validationStarted ? "validation" : "update";
+        alertMessage = getUserFriendlyCityError(error, errorContext);
         render();
         announce(alertMessage);
       } finally {
@@ -1923,6 +2027,12 @@
           const currentVersion = Number(currentCity?.dataVersion) || 1;
           const nextVersion = currentVersion + 1;
           const nowIso = new Date().toISOString();
+
+          previousActivePackage = await loadStoredCityData(currentCity.id);
+
+          const nextPackage = validatedPackage.package || currentCity.package || null;
+          const nextVersionStr = nextPackage?.version || String(nextVersion);
+
           const cityToSave = {
             ...(validatedPackage.boundary && !validatedPackage.city.boundary
               ? { ...validatedPackage.city, boundary: validatedPackage.boundary }
@@ -1930,7 +2040,10 @@
             id: currentCity.id,
             osmId: currentCity.osmId,
             osmType: currentCity.osmType || "relation",
-            source: currentCity.source || "openstreetmap",
+            source: nextPackage?.source || currentCity.source || "catalog",
+            package: nextPackage,
+            version: nextVersionStr,
+            contentHash: nextPackage?.contentHash || currentCity.contentHash,
             createdAt: currentCity.createdAt || validatedPackage.city.createdAt || nowIso,
             updatedAt: nowIso,
             lastOsmCheckAt: nowIso,
@@ -1958,8 +2071,8 @@
           phase = STATES.COMPLETED;
           completedCity = cityToSave;
           completedActivationAvailable = false;
-          elements.cityCompletedMessage.textContent = `${municipalityName(cityToSave)} wurde erfolgreich auf Version ${nextVersion} aktualisiert.${isActive ? " Die aktive Stadt wurde neu geladen." : ""}`;
-          setHeaderStatus(`${municipalityName(cityToSave)} wurde auf Version ${nextVersion} aktualisiert.`);
+          elements.cityCompletedMessage.textContent = `${municipalityName(cityToSave)} wurde erfolgreich auf Version ${nextVersionStr} aktualisiert.${isActive ? " Die aktive Stadt wurde neu geladen." : ""}`;
+          setHeaderStatus(`${municipalityName(cityToSave)} wurde auf Version ${nextVersionStr} aktualisiert.`);
           render();
           announce(elements.cityCompletedMessage.textContent);
           return;
@@ -2079,6 +2192,7 @@
       if (workflowSource === "update") {
         validatedPackage = null;
         updateDiff = null;
+        updateCheckResult = null;
         updatingCity = null;
         phase = STATES.IDLE;
         alertMessage = "";

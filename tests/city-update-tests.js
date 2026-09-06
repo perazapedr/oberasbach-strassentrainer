@@ -8,6 +8,7 @@ const updateApi = require("../city-update.js");
 const { createCityManager, getUserFriendlyCityError } = require("../city-manager-ui.js");
 const validatorApi = require("../city-data-validator.js");
 const packageApi = require("../city-package.js");
+const datasetProviderApi = require("../dataset-provider.js");
 const { createStatisticsStore, getStatisticsStorageKey } = require("../statistics.js");
 
 const tests = [];
@@ -695,9 +696,309 @@ test("10.2 Gameplay nach Stadtaktualisierung läuft 100% lokal ohne Overpass/Nom
   }
 });
 
+// -------------------------------------------------------------
+// Test Suite 11: Phase 15.6 Catalog-Updatecheck & Fehlerbehandlung
+// -------------------------------------------------------------
+
+test("11.1 gleiche Version liefert hasUpdate: false (kein Update nötig)", async () => {
+  const catalogFixture = {
+    schemaVersion: 1,
+    generatedAt: "2026-09-06T12:00:00.000Z",
+    datasets: [{
+      id: "de-nw-olpe",
+      name: "Olpe",
+      version: "2026.09.05",
+      cityId: "osm-relation-163179",
+      downloadPath: "cities/de-nw-olpe.json"
+    }]
+  };
+  const provider = datasetProviderApi.createCatalogDatasetProvider(catalogFixture);
+  const installed = {
+    id: "osm-relation-163179",
+    package: { id: "de-nw-olpe", version: "2026.09.05" }
+  };
+  const res = await provider.checkForUpdate(installed);
+  assert.equal(res.hasUpdate, false);
+  assert.equal(res.currentVersion, "2026.09.05");
+  assert.equal(res.latestVersion, "2026.09.05");
+});
+
+test("11.2 neuere CalVer liefert hasUpdate: true (Update verfügbar)", async () => {
+  const catalogFixture = {
+    schemaVersion: 1,
+    generatedAt: "2026-09-06T12:00:00.000Z",
+    datasets: [{
+      id: "de-nw-olpe",
+      name: "Olpe",
+      version: "2026.09.06",
+      cityId: "osm-relation-163179",
+      downloadPath: "cities/de-nw-olpe.json"
+    }]
+  };
+  const provider = datasetProviderApi.createCatalogDatasetProvider(catalogFixture);
+  const installed = {
+    id: "osm-relation-163179",
+    package: { id: "de-nw-olpe", version: "2026.09.05" }
+  };
+  const res = await provider.checkForUpdate(installed);
+  assert.equal(res.hasUpdate, true);
+  assert.equal(res.currentVersion, "2026.09.05");
+  assert.equal(res.latestVersion, "2026.09.06");
+});
+
+test("11.3 ältere Katalogversion bietet kein Downgrade an (hasUpdate: false)", async () => {
+  const catalogFixture = {
+    schemaVersion: 1,
+    generatedAt: "2026-09-06T12:00:00.000Z",
+    datasets: [{
+      id: "de-nw-olpe",
+      name: "Olpe",
+      version: "2026.09.04",
+      cityId: "osm-relation-163179",
+      downloadPath: "cities/de-nw-olpe.json"
+    }]
+  };
+  const provider = datasetProviderApi.createCatalogDatasetProvider(catalogFixture);
+  const installed = {
+    id: "osm-relation-163179",
+    package: { id: "de-nw-olpe", version: "2026.09.05" }
+  };
+  const res = await provider.checkForUpdate(installed);
+  assert.equal(res.hasUpdate, false);
+});
+
+test("11.4 SemVer-Vergleich funktioniert weiterhin korrekt", async () => {
+  const catalogFixture = {
+    schemaVersion: 1,
+    generatedAt: "2026-09-06T12:00:00.000Z",
+    datasets: [{
+      id: "de-oberasbach-fire-training",
+      name: "Oberasbach",
+      version: "1.1.0",
+      cityId: "osm-relation-1016396",
+      downloadPath: "cities/oberasbach.json"
+    }]
+  };
+  const provider = datasetProviderApi.createCatalogDatasetProvider(catalogFixture);
+  const installed = {
+    id: "osm-relation-1016396",
+    package: { id: "de-oberasbach-fire-training", version: "1.0.0" }
+  };
+  const res = await provider.checkForUpdate(installed);
+  assert.equal(res.hasUpdate, true);
+
+  const resSame = await provider.checkForUpdate({
+    id: "osm-relation-1016396",
+    package: { id: "de-oberasbach-fire-training", version: "1.1.0" }
+  });
+  assert.equal(resSame.hasUpdate, false);
+});
+
+test("11.5 Dataset fehlt im Katalog wirft DATASET_NOT_FOUND", async () => {
+  const catalogFixture = {
+    schemaVersion: 1,
+    generatedAt: "2026-09-06T12:00:00.000Z",
+    datasets: []
+  };
+  const provider = datasetProviderApi.createCatalogDatasetProvider(catalogFixture);
+  const installed = {
+    id: "osm-relation-999999",
+    package: { id: "unknown-city", version: "1.0.0" }
+  };
+  await assert.rejects(
+    async () => provider.checkForUpdate(installed),
+    err => err.code === "DATASET_NOT_FOUND"
+  );
+});
+
+test("11.6 Katalogfehler wirft CATALOG_UNAVAILABLE", async () => {
+  const provider = datasetProviderApi.createCatalogDatasetProvider({
+    catalogUrl: "http://127.0.0.1:54321/non-existent-catalog.json",
+    fetch: async () => {
+      throw new Error("Network connection refused");
+    }
+  });
+  const installed = {
+    id: "osm-relation-163179",
+    package: { id: "de-nw-olpe", version: "2026.09.05" }
+  };
+  await assert.rejects(
+    async () => provider.checkForUpdate(installed),
+    err => err.code === "CATALOG_UNAVAILABLE"
+  );
+});
+
+test("11.7 Ungültige Versionsinformation wirft INVALID_VERSION", async () => {
+  const catalogFixture = {
+    schemaVersion: 1,
+    generatedAt: "2026-09-06T12:00:00.000Z",
+    datasets: [{
+      id: "de-nw-olpe",
+      name: "Olpe",
+      version: "invalid-version-string",
+      cityId: "osm-relation-163179",
+      downloadPath: "cities/de-nw-olpe.json"
+    }]
+  };
+  const provider = datasetProviderApi.createCatalogDatasetProvider(catalogFixture);
+  const installed = {
+    id: "osm-relation-163179",
+    package: { id: "de-nw-olpe", version: "2026.09.05" }
+  };
+  await assert.rejects(
+    async () => provider.checkForUpdate(installed),
+    err => err.code === "INVALID_VERSION"
+  );
+});
+
+test("11.8 Downloadfehler wirft DOWNLOAD_FAILED", async () => {
+  const catalogFixture = {
+    schemaVersion: 1,
+    generatedAt: "2026-09-06T12:00:00.000Z",
+    datasets: [{
+      id: "de-nw-olpe",
+      name: "Olpe",
+      version: "2026.09.06",
+      contentHash: "sha256:dummy",
+      downloadPath: "cities/missing.json"
+    }]
+  };
+  const provider = datasetProviderApi.createCatalogDatasetProvider(catalogFixture, {
+    baseUrl: "http://127.0.0.1:54321/",
+    fetch: async () => {
+      return { ok: false, status: 404 };
+    }
+  });
+  await assert.rejects(
+    async () => provider.downloadDataset("de-nw-olpe"),
+    err => err.code === "DOWNLOAD_FAILED"
+  );
+});
+
+test("11.9 Catalog-Hash-Mismatch wird abgewiesen", async () => {
+  const fixtureV2Path = path.join(__dirname, "fixtures", "update", "olpe-v2.json");
+  const pkgV2 = JSON.parse(fs.readFileSync(fixtureV2Path, "utf8"));
+  const catalogFixture = {
+    schemaVersion: 1,
+    generatedAt: "2026-09-06T12:00:00.000Z",
+    datasets: [{
+      id: "de-nw-olpe",
+      name: "Olpe",
+      version: "2026.09.06",
+      contentHash: "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+      downloadPath: "cities/de-nw-olpe-v2.json"
+    }]
+  };
+  const provider = datasetProviderApi.createCatalogDatasetProvider(catalogFixture, {
+    loadPackage: async () => pkgV2
+  });
+  await assert.rejects(
+    async () => provider.downloadDataset("de-nw-olpe"),
+    err => err.code === "HASH_MISMATCH"
+  );
+});
+
+test("11.10 Package-Hash-Mismatch durch Datenmanipulation erkannt", () => {
+  const fixtureV2Path = path.join(__dirname, "fixtures", "update", "olpe-v2.json");
+  const pkgV2 = JSON.parse(fs.readFileSync(fixtureV2Path, "utf8"));
+  pkgV2.streets[0].name = "Manipulierte Straße";
+  const check = validatorApi.verifyPackageHash(pkgV2);
+  assert.equal(check.valid, false);
+  assert.equal(check.status, "mismatch");
+});
+
+test("11.11 Validator-Fehler blockiert ungültiges Paket", () => {
+  const fixtureV2Path = path.join(__dirname, "fixtures", "update", "olpe-v2.json");
+  const pkgV2 = JSON.parse(fs.readFileSync(fixtureV2Path, "utf8"));
+  delete pkgV2.city.name;
+  const packageCheck = validatorApi.validateCityPackage(pkgV2);
+  assert.equal(packageCheck.valid, false);
+  const dataCheck = validatorApi.validateCityData(pkgV2, { sourceMode: "download" });
+  assert.equal(dataCheck.valid, false);
+});
+
+test("11.12 AbortSignal bricht checkForUpdate und downloadDataset sauber ab", async () => {
+  const catalogFixture = {
+    schemaVersion: 1,
+    generatedAt: "2026-09-06T12:00:00.000Z",
+    datasets: [{
+      id: "de-nw-olpe",
+      name: "Olpe",
+      version: "2026.09.06",
+      downloadPath: "cities/de-nw-olpe.json"
+    }]
+  };
+  const provider = datasetProviderApi.createCatalogDatasetProvider(catalogFixture);
+  const ac = new AbortController();
+  ac.abort();
+
+  await assert.rejects(
+    async () => provider.checkForUpdate({ id: "de-nw-olpe", version: "2026.09.05" }, { signal: ac.signal }),
+    err => err.code === "ABORTED"
+  );
+  await assert.rejects(
+    async () => provider.downloadDataset("de-nw-olpe", { signal: ac.signal }),
+    err => err.code === "ABORTED"
+  );
+});
+
+// -------------------------------------------------------------
+// Test Suite 12: Phase 15.6 Update-Diff mit Real-Fixtures V1 und V2
+// -------------------------------------------------------------
+
+test("12.1 Diff zwischen Fixture V1 und V2 liefert exakte Counts (+1/-1 Straße, +1/-1 POI, 0 Area)", () => {
+  const v1Path = path.join(__dirname, "fixtures", "update", "olpe-v1.json");
+  const v2Path = path.join(__dirname, "fixtures", "update", "olpe-v2.json");
+  const pkgV1 = JSON.parse(fs.readFileSync(v1Path, "utf8"));
+  const pkgV2 = JSON.parse(fs.readFileSync(v2Path, "utf8"));
+
+  const diff = updateApi.compareCityVersions(pkgV1, pkgV2);
+  assert.equal(diff.hasChanges, true);
+  assert.equal(diff.summary.streets.added, 1);
+  assert.equal(diff.summary.streets.removed, 1);
+  assert.equal(diff.summary.streets.unchanged, 460);
+  assert.equal(diff.streets.added[0].name, "Neue Teststraße");
+  assert.equal(diff.streets.removed[0].name, "Zur Wolfsschlade");
+
+  assert.equal(diff.summary.pois.added, 1);
+  assert.equal(diff.summary.pois.removed, 1);
+  assert.equal(diff.summary.pois.unchanged, 113);
+  assert.equal(diff.pois.added[0].name, "Neue Test-Feuerwache");
+  assert.equal(diff.pois.removed[0].name, "Polizei");
+
+  assert.equal(diff.summary.areas.added, 0);
+  assert.equal(diff.summary.areas.removed, 0);
+  assert.equal(diff.summary.areas.unchanged, 2);
+});
+
+test("12.2 Update-Diff ist deterministisch (Reihenfolgeunabhängig und stabile Ausgabe)", () => {
+  const v1Path = path.join(__dirname, "fixtures", "update", "olpe-v1.json");
+  const v2Path = path.join(__dirname, "fixtures", "update", "olpe-v2.json");
+  const pkgV1 = JSON.parse(fs.readFileSync(v1Path, "utf8"));
+  const pkgV2 = JSON.parse(fs.readFileSync(v2Path, "utf8"));
+
+  const diffA = updateApi.compareCityVersions(pkgV1, pkgV2);
+
+  const pkgV1Shuffled = clone(pkgV1);
+  pkgV1Shuffled.streets.reverse();
+  pkgV1Shuffled.pois.reverse();
+  const pkgV2Shuffled = clone(pkgV2);
+  pkgV2Shuffled.streets.reverse();
+  pkgV2Shuffled.pois.reverse();
+
+  const diffB = updateApi.compareCityVersions(pkgV1Shuffled, pkgV2Shuffled);
+
+  assert.deepEqual(diffA.streets.added, diffB.streets.added);
+  assert.deepEqual(diffA.streets.removed, diffB.streets.removed);
+  assert.deepEqual(diffA.streets.unchanged, diffB.streets.unchanged);
+  assert.deepEqual(diffA.pois.added, diffB.pois.added);
+  assert.deepEqual(diffA.pois.removed, diffB.pois.removed);
+  assert.deepEqual(diffA.pois.unchanged, diffB.pois.unchanged);
+});
+
 // Run all tests
 async function runAll() {
-  console.log(`Starte ${tests.length} Phase-14.1-City-Update-Tests ...\n`);
+  console.log(`Starte ${tests.length} Phase-15.6-City-Update-Tests ...\n`);
   let passed = 0;
   for (let i = 0; i < tests.length; i++) {
     const t = tests[i];
