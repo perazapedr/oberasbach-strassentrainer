@@ -1,0 +1,36 @@
+{
+  "schemaVersion": 1,
+  "regionId": "de-nw",
+  "description": "Nordrhein-Westfalen kommunale Trainingspakete",
+  "datasets": [
+    {
+      "datasetId": "de-nw-olpe",
+      "name": "Olpe",
+      "relationId": 163179,
+      "adminLevel": 8,
+      "enabled": true
+    },
+    {
+      "datasetId": "de-nw-wenden",
+      "name": "Wenden",
+      "relationId": 160880,
+      "adminLevel": 8,
+      "enabled": true
+    },
+    {
+      "datasetId": "de-nw-siegen",
+      "name": "Siegen",
+      "relationId": 163256,
+      "adminLevel": 8,
+      "enabled": true
+    },
+    {
+      "datasetId": "de-nw-koeln",
+      "name": "Köln",
+      "relationId": 62578,
+      "adminLevel": 6,
+      "enabled": true
+    }
+  ]
+}
+

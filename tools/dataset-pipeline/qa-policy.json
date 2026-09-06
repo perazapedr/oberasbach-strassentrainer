@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "area": {
+    "containmentThreshold": 0.85,
+    "touchingThreshold": 0.05,
+    "requireHierarchy": true,
+    "disallowRejectedInPackage": true
+  },
+  "street": {
+    "minCount": 1,
+    "maxDropRatio": 0.10
+  },
+  "poi": {
+    "minCount": 1,
+    "maxDropRatio": 0.15
+  },
+  "validation": {
+    "maxErrors": 0,
+    "maxCriticalWarnings": 0
+  }
+}
+

@@ -1,0 +1,63 @@
+{
+  "schemaVersion": 1,
+  "updatedAt": "2026-09-06T20:40:26.044Z",
+  "datasets": {
+    "de-oberasbach-fire-training": {
+      "datasetId": "de-oberasbach-fire-training",
+      "name": "Oberasbach",
+      "version": "1.0.0",
+      "contentHash": "sha256:1a0854340fa6519d7a3947b0726767e45aca323dfeaadaefff999801bb921b95",
+      "packageType": "curated",
+      "protected": true,
+      "streetCount": 271,
+      "poiCount": 60,
+      "areaCount": 0,
+      "filePath": "data/cities/oberasbach.json"
+    },
+    "de-nw-olpe": {
+      "datasetId": "de-nw-olpe",
+      "name": "Olpe",
+      "version": "2026.09.05",
+      "contentHash": "sha256:6c89d676e575f2d69301715c3be5e8e66b5a798afc21b73495671fa33d996269",
+      "packageType": "osm",
+      "protected": false,
+      "streetCount": 461,
+      "poiCount": 114,
+      "areaCount": 2,
+      "filePath": "data/cities/de-nw-olpe.json"
+    },
+    "de-nw-wenden": {
+      "datasetId": "de-nw-wenden",
+      "version": "2026.09.05",
+      "contentHash": "sha256:a5e0edb8deb7e3cee8e7e0b0864e7e533c44ed76b5a1dc319526ff66149be6f4",
+      "packageType": "osm",
+      "protected": false,
+      "publishedAt": "2026-09-06T20:40:26.044Z",
+      "filePath": "data/cities/de-nw-wenden.json"
+    },
+    "de-nw-siegen": {
+      "datasetId": "de-nw-siegen",
+      "name": "Siegen",
+      "version": "2026.09.05",
+      "contentHash": "sha256:f3d357f23ca65ea9d6fbb14dbd254d4e8955cb3ccaa3359786757fa87f4e95bb",
+      "packageType": "osm",
+      "protected": false,
+      "streetCount": 1176,
+      "poiCount": 426,
+      "areaCount": 23,
+      "filePath": "data/cities/de-nw-siegen.json"
+    },
+    "de-nw-koeln": {
+      "datasetId": "de-nw-koeln",
+      "name": "Köln",
+      "version": "2026.09.05",
+      "contentHash": "sha256:82533736b96d1734aca82aa3f3829552c80dfad923348a4cc1f73a4068b047b2",
+      "packageType": "osm",
+      "protected": false,
+      "streetCount": 4628,
+      "poiCount": 4453,
+      "areaCount": 101,
+      "filePath": "data/cities/de-nw-koeln.json"
+    }
+  }
+}

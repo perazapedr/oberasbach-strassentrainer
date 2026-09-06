@@ -31,7 +31,7 @@ function parseArgs(argv) {
   const valueOptions = new Map([
     ["--pbf", "pbf"], ["--municipality", "municipality"], ["--output", "output"],
     ["--relation-id", "relationId"], ["--admin-level", "adminLevel"], ["--dataset-id", "datasetId"],
-    ["--report", "report"], ["--state", "state"], ["--country", "country"]
+    ["--report", "report"], ["--state", "state"], ["--country", "country"], ["--version", "version"]
   ]);
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
@@ -54,6 +54,10 @@ function parseArgs(argv) {
   if (options.datasetId !== undefined) {
     options.datasetId = String(options.datasetId).trim();
     if (!options.datasetId) throw new Error("--dataset-id must be non-empty string.");
+  }
+  if (options.version !== undefined) {
+    options.version = String(options.version).trim();
+    if (!options.version) throw new Error("--version must be non-empty string.");
   }
   return options;
 }
@@ -131,6 +135,13 @@ async function build(options) {
   await run("osmium", ["--version"], { verbose: false });
   const startedAt = process.hrtime.bigint();
   const initialRss = process.memoryUsage().rss;
+  let peakRss = initialRss;
+  const memorySampler = setInterval(() => {
+    try {
+      const current = process.memoryUsage().rss;
+      if (current > peakRss) peakRss = current;
+    } catch (_) {}
+  }, 25);
   const workDir = fs.mkdtempSync(path.join(os.tmpdir(), "strassentrainer-pbf-"));
   const boundaryPbf = path.join(workDir, "municipality-boundary.osm.pbf");
   const boundaryGeoJson = path.join(workDir, "municipality-boundary.geojson");
@@ -182,13 +193,21 @@ async function build(options) {
       state: options.state,
       country: options.country,
       pbfTimestamp,
-      sourcePbf: options.pbf
+      sourcePbf: options.pbf,
+      version: options.version
     });
 
     phase("Validating package and computing contentHash …");
     fs.mkdirSync(path.dirname(options.output), { recursive: true });
     fs.writeFileSync(options.output, `${JSON.stringify(assembled.packageData, null, 2)}\n`);
     const elapsedSeconds = Number(process.hrtime.bigint() - startedAt) / 1e9;
+    clearInterval(memorySampler);
+    const endRss = process.memoryUsage().rss;
+    if (endRss > peakRss) peakRss = endRss;
+    const rusage = typeof process.resourceUsage === "function" ? process.resourceUsage() : null;
+    const osMaxRssBytes = rusage && rusage.maxRSS ? rusage.maxRSS * 1024 : peakRss;
+    const effectivePeakRss = Math.max(peakRss, osMaxRssBytes);
+
     const report = {
       status: "PASS",
       builderVersion: core.BUILDER_VERSION,
@@ -201,6 +220,11 @@ async function build(options) {
       boundaryType: boundary.type,
       buildSeconds: Number(elapsedSeconds.toFixed(3)),
       processRssDeltaBytes: Math.max(0, process.memoryUsage().rss - initialRss),
+      processRssStartBytes: initialRss,
+      processRssPeakBytes: effectivePeakRss,
+      processRssDeltaBytes: Math.max(0, effectivePeakRss - initialRss),
+      processRssEndBytes: endRss,
+      processMaxRssBytes: osMaxRssBytes,
       output: options.output,
       packageBytes: fs.statSync(options.output).size,
       contentHash: assembled.packageData.package.contentHash,
@@ -217,6 +241,7 @@ async function build(options) {
     phase(`Done. ${report.counts.finalStreets} streets, ${report.counts.finalPois} POIs, ${report.counts.finalAreas} areas.`);
     return report;
   } finally {
+    clearInterval(memorySampler);
     if (!options.keepWork) fs.rmSync(workDir, { recursive: true, force: true });
   }
 }

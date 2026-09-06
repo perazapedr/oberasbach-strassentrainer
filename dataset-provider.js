@@ -328,10 +328,15 @@
 
         if (item.downloadPath) {
           assertSafeRelativePath(item.downloadPath, providerId);
+        const pathCandidate = item.downloadPath || item.packageUrl;
+        if (pathCandidate) {
+          assertSafeRelativePath(pathCandidate, providerId);
         }
 
         const normalized = normalizeDatasetMetadata({
           ...item,
+          downloadPath: pathCandidate,
+          packageUrl: item.packageUrl || pathCandidate,
           provider: providerId
         }, providerId);
         map.set(id, normalized);
@@ -485,6 +490,7 @@
       throwIfAborted(downloadOptions.signal);
 
       const downloadPath = assertSafeRelativePath(metadata.downloadPath, providerId);
+      const downloadPath = assertSafeRelativePath(metadata.downloadPath || metadata.packageUrl, providerId);
 
       if (typeof downloadOptions.onProgress === "function") {
         downloadOptions.onProgress({ stage: "downloading", message: `${metadata.name} wird geladen …`, progress: 20 });

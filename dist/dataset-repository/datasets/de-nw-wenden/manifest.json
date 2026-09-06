@@ -1,0 +1,31 @@
+{
+  "schemaVersion": 1,
+  "datasetId": "de-nw-wenden",
+  "name": "Wenden",
+  "displayName": "Wenden",
+  "version": "2026.09.05",
+  "contentHash": "sha256:a5e0edb8deb7e3cee8e7e0b0864e7e533c44ed76b5a1dc319526ff66149be6f4",
+  "publishedAt": "2026-09-06T21:23:06.199Z",
+  "counts": {
+    "streetCount": 460,
+    "poiCount": 37,
+    "areaCount": 3
+  },
+  "files": {
+    "package": {
+      "path": "package.json",
+      "sizeBytes": 987422,
+      "sha256": "d628f963325f26541c4c4af37577b7586a94415b6d24ee17da3fca445202da35"
+    },
+    "gzip": {
+      "path": "package.json.gz",
+      "sizeBytes": 102275,
+      "sha256": "9e5defabda3282b2a82ef1bc832208cd4bf12fd5a95555562c6483711e8593f4"
+    },
+    "brotli": {
+      "path": "package.json.br",
+      "sizeBytes": 70901,
+      "sha256": "a0a4ffa75e5e86e17eb638b36f2b43a8a69484b058d77389fb08b691c4eb5287"
+    }
+  }
+}

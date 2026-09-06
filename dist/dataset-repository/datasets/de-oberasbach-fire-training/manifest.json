@@ -1,0 +1,31 @@
+{
+  "schemaVersion": 1,
+  "datasetId": "de-oberasbach-fire-training",
+  "name": "Oberasbach",
+  "displayName": "Oberasbach",
+  "version": "1.0.0",
+  "contentHash": "sha256:1a0854340fa6519d7a3947b0726767e45aca323dfeaadaefff999801bb921b95",
+  "publishedAt": "2026-09-06T21:23:06.199Z",
+  "counts": {
+    "streetCount": 271,
+    "poiCount": 60,
+    "areaCount": 0
+  },
+  "files": {
+    "package": {
+      "path": "package.json",
+      "sizeBytes": 573142,
+      "sha256": "2fe29136278c4476f13688b57faa482d9ee5654c2443664d00a0d1d4359c2bab"
+    },
+    "gzip": {
+      "path": "package.json.gz",
+      "sizeBytes": 57502,
+      "sha256": "2e6266e8ae384ca1b54c1cf232bbd6228fcdd881beb9ee511a6cc44d7d9c03c4"
+    },
+    "brotli": {
+      "path": "package.json.br",
+      "sizeBytes": 41562,
+      "sha256": "9a51713e67a73297362e446bc6db99605eaeecbad5f09b6c5f76b17dc2d2cbea"
+    }
+  }
+}

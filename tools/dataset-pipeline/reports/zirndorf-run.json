@@ -1,0 +1,597 @@
+{
+  "runId": "run-1788727409127-20228",
+  "pipelineVersion": "1.0.0",
+  "builderVersion": "0.1.0",
+  "startedAt": "2026-09-06T20:43:29.080Z",
+  "finishedAt": "2026-09-06T20:43:49.381Z",
+  "durationSeconds": 20.3,
+  "region": "de-by",
+  "pbfMetadata": {
+    "status": "PASS",
+    "pipelineVersion": "1.0.0",
+    "builderVersion": "0.1.0",
+    "osmiumVersion": "1.19.1",
+    "pbfPath": "/Users/pedro/oberasbach-strassentrainer-gesamtstatistik/tools/dataset-builder/work/bayern-latest.osm.pbf",
+    "pbfSize": 850807454,
+    "osmTimestamp": "2026-09-05T20:22:06.000Z",
+    "manifestRegion": "de-by",
+    "targetCount": 1
+  },
+  "mode": {
+    "dryRun": false,
+    "noPublish": true,
+    "all": false,
+    "singleDataset": "de-by-zirndorf"
+  },
+  "targets": [
+    {
+      "datasetId": "de-by-zirndorf",
+      "name": "Zirndorf",
+      "relationId": 3351257,
+      "adminLevel": 8
+    }
+  ],
+  "buildResults": [
+    {
+      "status": "PASS",
+      "datasetId": "de-by-zirndorf",
+      "target": {
+        "datasetId": "de-by-zirndorf",
+        "name": "Zirndorf",
+        "relationId": 3351257,
+        "adminLevel": 8,
+        "enabled": true
+      },
+      "durationSeconds": 19.24,
+      "outputFile": "/var/folders/nf/sbkpnb196vj295zvntzlc6t00000gn/T/strassentrainer-pipeline/run-1788727409127-20228/cities/de-by-zirndorf.json",
+      "reportFile": "/var/folders/nf/sbkpnb196vj295zvntzlc6t00000gn/T/strassentrainer-pipeline/run-1788727409127-20228/reports/de-by-zirndorf-report.json",
+      "buildReport": {
+        "status": "PASS",
+        "builderVersion": "0.1.0",
+        "sourcePbf": "bayern-latest.osm.pbf",
+        "osmDataTimestamp": "2026-09-05T20:22:06.000Z",
+        "municipality": "Zirndorf",
+        "municipalityRelation": 3351257,
+        "adminLevel": 8,
+        "municipalityKey": "09573134",
+        "boundaryType": "Polygon",
+        "buildSeconds": 19.151,
+        "processRssDeltaBytes": 92291072,
+        "output": "/var/folders/nf/sbkpnb196vj295zvntzlc6t00000gn/T/strassentrainer-pipeline/run-1788727409127-20228/cities/de-by-zirndorf.json",
+        "packageBytes": 911271,
+        "contentHash": "sha256:766615fdfddcbea7250d218f3b9f79c5f18e8e3b72fdcf99f7218e4867340f49",
+        "counts": {
+          "featuresRead": 43190,
+          "rawStreetWays": 1025,
+          "eligibleStreetWays": 932,
+          "streetWaysOutside": 2,
+          "streetWaysClipped": 18,
+          "rawPoiCandidates": 187,
+          "poiNodes": 65,
+          "poiWays": 61,
+          "poiRelations": 0,
+          "rawAreaCandidates": 11,
+          "acceptedAreaCandidates": 0,
+          "rejectedAreaCandidates": 11,
+          "areaClassificationReport": [
+            {
+              "id": "relation:1016400",
+              "name": "Roßtal",
+              "osmType": "relation",
+              "osmId": 1016400,
+              "adminLevel": 8,
+              "category": "administrative",
+              "placeType": null,
+              "boundaryType": "administrative",
+              "contained": false,
+              "ratioInside": 0,
+              "centerInside": false,
+              "hierarchyMatch": false,
+              "decision": "rejected",
+              "reason": "REJECTED_SAME_ADMIN_LEVEL"
+            },
+            {
+              "id": "relation:1016395",
+              "name": "Ammerndorf",
+              "osmType": "relation",
+              "osmId": 1016395,
+              "adminLevel": 8,
+              "category": "administrative",
+              "placeType": null,
+              "boundaryType": "administrative",
+              "contained": false,
+              "ratioInside": 0,
+              "centerInside": false,
+              "hierarchyMatch": false,
+              "decision": "rejected",
+              "reason": "REJECTED_SAME_ADMIN_LEVEL"
+            },
+            {
+              "id": "relation:1016396",
+              "name": "Oberasbach",
+              "osmType": "relation",
+              "osmId": 1016396,
+              "adminLevel": 8,
+              "category": "administrative",
+              "placeType": null,
+              "boundaryType": "administrative",
+              "contained": false,
+              "ratioInside": 0,
+              "centerInside": false,
+              "hierarchyMatch": false,
+              "decision": "rejected",
+              "reason": "REJECTED_SAME_ADMIN_LEVEL"
+            },
+            {
+              "id": "relation:1016404",
+              "name": "Cadolzburg",
+              "osmType": "relation",
+              "osmId": 1016404,
+              "adminLevel": 8,
+              "category": "administrative",
+              "placeType": null,
+              "boundaryType": "administrative",
+              "contained": false,
+              "ratioInside": 0,
+              "centerInside": false,
+              "hierarchyMatch": false,
+              "decision": "rejected",
+              "reason": "REJECTED_SAME_ADMIN_LEVEL"
+            },
+            {
+              "id": "relation:1016405",
+              "name": "Stein",
+              "osmType": "relation",
+              "osmId": 1016405,
+              "adminLevel": 8,
+              "category": "administrative",
+              "placeType": null,
+              "boundaryType": "administrative",
+              "contained": false,
+              "ratioInside": 0,
+              "centerInside": false,
+              "hierarchyMatch": false,
+              "decision": "rejected",
+              "reason": "REJECTED_SAME_ADMIN_LEVEL"
+            },
+            {
+              "id": "relation:3351257",
+              "name": "Zirndorf",
+              "osmType": "relation",
+              "osmId": 3351257,
+              "adminLevel": 8,
+              "category": "administrative",
+              "placeType": null,
+              "boundaryType": "administrative",
+              "contained": false,
+              "ratioInside": 0,
+              "centerInside": false,
+              "hierarchyMatch": false,
+              "decision": "rejected",
+              "reason": "REJECTED_TARGET_MUNICIPALITY"
+            },
+            {
+              "id": "relation:19795657",
+              "name": "Oberfürberg, Eschenau",
+              "osmType": "relation",
+              "osmId": 19795657,
+              "adminLevel": 11,
+              "category": "administrative",
+              "placeType": null,
+              "boundaryType": "administrative",
+              "contained": false,
+              "ratioInside": 0,
+              "centerInside": false,
+              "hierarchyMatch": false,
+              "decision": "rejected",
+              "reason": "REJECTED_OUTSIDE"
+            },
+            {
+              "id": "relation:19795656",
+              "name": "Dambach, Unterfürberg",
+              "osmType": "relation",
+              "osmId": 19795656,
+              "adminLevel": 11,
+              "category": "administrative",
+              "placeType": null,
+              "boundaryType": "administrative",
+              "contained": false,
+              "ratioInside": 0,
+              "centerInside": false,
+              "hierarchyMatch": false,
+              "decision": "rejected",
+              "reason": "REJECTED_OUTSIDE"
+            },
+            {
+              "id": "relation:19265553",
+              "name": "Süd",
+              "osmType": "relation",
+              "osmId": 19265553,
+              "adminLevel": 10,
+              "category": "administrative",
+              "placeType": null,
+              "boundaryType": "administrative",
+              "contained": false,
+              "ratioInside": 0,
+              "centerInside": false,
+              "hierarchyMatch": false,
+              "decision": "rejected",
+              "reason": "REJECTED_OUTSIDE"
+            },
+            {
+              "id": "relation:19795649",
+              "name": "Kalb-Siedlung, Weikershof",
+              "osmType": "relation",
+              "osmId": 19795649,
+              "adminLevel": 11,
+              "category": "administrative",
+              "placeType": null,
+              "boundaryType": "administrative",
+              "contained": false,
+              "ratioInside": 0,
+              "centerInside": false,
+              "hierarchyMatch": false,
+              "decision": "rejected",
+              "reason": "REJECTED_OUTSIDE"
+            },
+            {
+              "id": "relation:19265555",
+              "name": "West",
+              "osmType": "relation",
+              "osmId": 19265555,
+              "adminLevel": 10,
+              "category": "administrative",
+              "placeType": null,
+              "boundaryType": "administrative",
+              "contained": false,
+              "ratioInside": 0,
+              "centerInside": false,
+              "hierarchyMatch": false,
+              "decision": "rejected",
+              "reason": "REJECTED_OUTSIDE"
+            }
+          ],
+          "rawStreets": 345,
+          "rawPois": 126,
+          "finalStreets": 345,
+          "finalPois": 124,
+          "finalAreas": 0,
+          "invalidStreetsRemoved": 0,
+          "invalidPoisRemoved": 1,
+          "streetDuplicatesMerged": 0,
+          "poiDuplicatesMerged": 1,
+          "validatorErrors": [
+            {
+              "code": "POI_OUTSIDE_BOUNDARY",
+              "severity": "error",
+              "entityType": "poi",
+              "entityId": "osm-relation-3351257:poi:way-317345180",
+              "message": "Der POI liegt vollständig außerhalb der administrativen Gemeindegrenze."
+            }
+          ],
+          "validatorWarnings": [
+            {
+              "code": "POI_PARTLY_OUTSIDE_BOUNDARY",
+              "severity": "warning",
+              "entityType": "poi",
+              "entityId": "osm-relation-3351257:poi:way-190252897",
+              "message": "Die POI-Fläche liegt nur teilweise innerhalb der administrativen Gemeindegrenze."
+            },
+            {
+              "code": "POI_DUPLICATE_MERGED",
+              "severity": "warning",
+              "entityType": "poi",
+              "entityId": "osm-relation-3351257:poi:way-353705035",
+              "message": "Ein sicher äquivalenter Node-/Polygon-POI wurde zusammengeführt.",
+              "details": {
+                "mergedEntityIds": [
+                  "osm-relation-3351257:poi:node-482340656",
+                  "osm-relation-3351257:poi:way-353705035"
+                ],
+                "sourceOsmObjects": [
+                  {
+                    "osmType": "node",
+                    "osmId": 482340656
+                  },
+                  {
+                    "osmType": "way",
+                    "osmId": 353705035
+                  }
+                ]
+              }
+            },
+            {
+              "code": "POI_POSSIBLE_DUPLICATE",
+              "severity": "warning",
+              "entityType": "poi",
+              "entityId": "osm-relation-3351257:poi:way-1075484172",
+              "message": "Ähnliche nahe POIs wurden mangels eindeutiger Node-/Polygon-Evidenz nicht zusammengeführt.",
+              "details": {
+                "candidateIds": [
+                  "osm-relation-3351257:poi:way-1075484172",
+                  "osm-relation-3351257:poi:way-473134807"
+                ]
+              }
+            }
+          ],
+          "packageWarnings": []
+        },
+        "areaClassification": [
+          {
+            "id": "relation:1016400",
+            "name": "Roßtal",
+            "osmType": "relation",
+            "osmId": 1016400,
+            "adminLevel": 8,
+            "category": "administrative",
+            "placeType": null,
+            "boundaryType": "administrative",
+            "contained": false,
+            "ratioInside": 0,
+            "centerInside": false,
+            "hierarchyMatch": false,
+            "decision": "rejected",
+            "reason": "REJECTED_SAME_ADMIN_LEVEL"
+          },
+          {
+            "id": "relation:1016395",
+            "name": "Ammerndorf",
+            "osmType": "relation",
+            "osmId": 1016395,
+            "adminLevel": 8,
+            "category": "administrative",
+            "placeType": null,
+            "boundaryType": "administrative",
+            "contained": false,
+            "ratioInside": 0,
+            "centerInside": false,
+            "hierarchyMatch": false,
+            "decision": "rejected",
+            "reason": "REJECTED_SAME_ADMIN_LEVEL"
+          },
+          {
+            "id": "relation:1016396",
+            "name": "Oberasbach",
+            "osmType": "relation",
+            "osmId": 1016396,
+            "adminLevel": 8,
+            "category": "administrative",
+            "placeType": null,
+            "boundaryType": "administrative",
+            "contained": false,
+            "ratioInside": 0,
+            "centerInside": false,
+            "hierarchyMatch": false,
+            "decision": "rejected",
+            "reason": "REJECTED_SAME_ADMIN_LEVEL"
+          },
+          {
+            "id": "relation:1016404",
+            "name": "Cadolzburg",
+            "osmType": "relation",
+            "osmId": 1016404,
+            "adminLevel": 8,
+            "category": "administrative",
+            "placeType": null,
+            "boundaryType": "administrative",
+            "contained": false,
+            "ratioInside": 0,
+            "centerInside": false,
+            "hierarchyMatch": false,
+            "decision": "rejected",
+            "reason": "REJECTED_SAME_ADMIN_LEVEL"
+          },
+          {
+            "id": "relation:1016405",
+            "name": "Stein",
+            "osmType": "relation",
+            "osmId": 1016405,
+            "adminLevel": 8,
+            "category": "administrative",
+            "placeType": null,
+            "boundaryType": "administrative",
+            "contained": false,
+            "ratioInside": 0,
+            "centerInside": false,
+            "hierarchyMatch": false,
+            "decision": "rejected",
+            "reason": "REJECTED_SAME_ADMIN_LEVEL"
+          },
+          {
+            "id": "relation:3351257",
+            "name": "Zirndorf",
+            "osmType": "relation",
+            "osmId": 3351257,
+            "adminLevel": 8,
+            "category": "administrative",
+            "placeType": null,
+            "boundaryType": "administrative",
+            "contained": false,
+            "ratioInside": 0,
+            "centerInside": false,
+            "hierarchyMatch": false,
+            "decision": "rejected",
+            "reason": "REJECTED_TARGET_MUNICIPALITY"
+          },
+          {
+            "id": "relation:19795657",
+            "name": "Oberfürberg, Eschenau",
+            "osmType": "relation",
+            "osmId": 19795657,
+            "adminLevel": 11,
+            "category": "administrative",
+            "placeType": null,
+            "boundaryType": "administrative",
+            "contained": false,
+            "ratioInside": 0,
+            "centerInside": false,
+            "hierarchyMatch": false,
+            "decision": "rejected",
+            "reason": "REJECTED_OUTSIDE"
+          },
+          {
+            "id": "relation:19795656",
+            "name": "Dambach, Unterfürberg",
+            "osmType": "relation",
+            "osmId": 19795656,
+            "adminLevel": 11,
+            "category": "administrative",
+            "placeType": null,
+            "boundaryType": "administrative",
+            "contained": false,
+            "ratioInside": 0,
+            "centerInside": false,
+            "hierarchyMatch": false,
+            "decision": "rejected",
+            "reason": "REJECTED_OUTSIDE"
+          },
+          {
+            "id": "relation:19265553",
+            "name": "Süd",
+            "osmType": "relation",
+            "osmId": 19265553,
+            "adminLevel": 10,
+            "category": "administrative",
+            "placeType": null,
+            "boundaryType": "administrative",
+            "contained": false,
+            "ratioInside": 0,
+            "centerInside": false,
+            "hierarchyMatch": false,
+            "decision": "rejected",
+            "reason": "REJECTED_OUTSIDE"
+          },
+          {
+            "id": "relation:19795649",
+            "name": "Kalb-Siedlung, Weikershof",
+            "osmType": "relation",
+            "osmId": 19795649,
+            "adminLevel": 11,
+            "category": "administrative",
+            "placeType": null,
+            "boundaryType": "administrative",
+            "contained": false,
+            "ratioInside": 0,
+            "centerInside": false,
+            "hierarchyMatch": false,
+            "decision": "rejected",
+            "reason": "REJECTED_OUTSIDE"
+          },
+          {
+            "id": "relation:19265555",
+            "name": "West",
+            "osmType": "relation",
+            "osmId": 19265555,
+            "adminLevel": 10,
+            "category": "administrative",
+            "placeType": null,
+            "boundaryType": "administrative",
+            "contained": false,
+            "ratioInside": 0,
+            "centerInside": false,
+            "hierarchyMatch": false,
+            "decision": "rejected",
+            "reason": "REJECTED_OUTSIDE"
+          }
+        ],
+        "osmiumWarnings": null,
+        "workDirectory": null
+      },
+      "peakRssBytes": 92291072,
+      "error": null
+    }
+  ],
+  "qaResults": [
+    {
+      "status": "PASS",
+      "classification": "NEW",
+      "datasetId": "de-by-zirndorf",
+      "version": "2026.09.05",
+      "contentHash": "sha256:766615fdfddcbea7250d218f3b9f79c5f18e8e3b72fdcf99f7218e4867340f49",
+      "streetCount": 345,
+      "poiCount": 124,
+      "areaCount": 0,
+      "errors": [],
+      "warnings": [],
+      "metrics": {
+        "areaQa": {
+          "totalAreas": 0,
+          "minAcceptedRatioInside": 1,
+          "maxRejectedRatioInside": 0,
+          "rejectedReasons": {
+            "SAME_ADMIN_LEVEL": 5,
+            "OUTSIDE": 5,
+            "TOUCHING_BOUNDARY": 0,
+            "PARTIAL_OVERLAP": 0,
+            "INVALID_GEOMETRY": 0,
+            "OTHER": 1
+          }
+        },
+        "streetQa": {
+          "count": 345,
+          "dropRatio": 0
+        },
+        "poiQa": {
+          "count": 124,
+          "dropRatio": 0
+        }
+      }
+    }
+  ],
+  "catalogResult": {
+    "status": "PASS",
+    "outputFile": "/var/folders/nf/sbkpnb196vj295zvntzlc6t00000gn/T/strassentrainer-pipeline/run-1788727409127-20228/catalog.json",
+    "datasetCount": 6,
+    "datasets": [
+      {
+        "id": "de-oberasbach-fire-training",
+        "name": "Oberasbach",
+        "version": "1.0.0",
+        "contentHash": "sha256:1a0854340fa6519d7a3947b0726767e45aca323dfeaadaefff999801bb921b95"
+      },
+      {
+        "id": "de-by-zirndorf",
+        "name": "Zirndorf",
+        "version": "2026.09.05",
+        "contentHash": "sha256:766615fdfddcbea7250d218f3b9f79c5f18e8e3b72fdcf99f7218e4867340f49"
+      },
+      {
+        "id": "de-nw-koeln",
+        "name": "Köln",
+        "version": "2026.09.05",
+        "contentHash": "sha256:82533736b96d1734aca82aa3f3829552c80dfad923348a4cc1f73a4068b047b2"
+      },
+      {
+        "id": "de-nw-olpe",
+        "name": "Olpe",
+        "version": "2026.09.05",
+        "contentHash": "sha256:6c89d676e575f2d69301715c3be5e8e66b5a798afc21b73495671fa33d996269"
+      },
+      {
+        "id": "de-nw-siegen",
+        "name": "Siegen",
+        "version": "2026.09.05",
+        "contentHash": "sha256:f3d357f23ca65ea9d6fbb14dbd254d4e8955cb3ccaa3359786757fa87f4e95bb"
+      },
+      {
+        "id": "de-nw-wenden",
+        "name": "Wenden",
+        "version": "2026.09.05",
+        "contentHash": "sha256:a5e0edb8deb7e3cee8e7e0b0864e7e533c44ed76b5a1dc319526ff66149be6f4"
+      }
+    ]
+  },
+  "publishResult": {
+    "status": "WOULD_PUBLISH",
+    "hasChanges": true,
+    "promotedDatasets": [
+      {
+        "datasetId": "de-by-zirndorf",
+        "classification": "NEW",
+        "version": "2026.09.05",
+        "contentHash": "sha256:766615fdfddcbea7250d218f3b9f79c5f18e8e3b72fdcf99f7218e4867340f49"
+      }
+    ]
+  },
+  "overallStatus": "PASS"
+}

@@ -1,0 +1,206 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-09-05T20:22:06.000Z",
+  "datasets": [
+    {
+      "id": "de-oberasbach-fire-training",
+      "name": "Oberasbach",
+      "displayName": "Oberasbach",
+      "datasetKind": "municipality",
+      "state": "Bayern",
+      "district": "Landkreis Fürth",
+      "country": "Deutschland",
+      "postalCodes": [
+        "90522"
+      ],
+      "cityId": "osm-relation-1016396",
+      "osmType": "relation",
+      "osmRelationId": 1016396,
+      "packageType": "curated",
+      "version": "1.0.0",
+      "contentHash": "sha256:1a0854340fa6519d7a3947b0726767e45aca323dfeaadaefff999801bb921b95",
+      "streetCount": 271,
+      "poiCount": 60,
+      "areaCount": 0,
+      "center": {
+        "lat": 49.4236043,
+        "lon": 10.9708709
+      },
+      "bounds": {
+        "south": 49.4017231,
+        "west": 10.9384173,
+        "north": 49.4454542,
+        "east": 10.9987491
+      },
+      "downloadPath": "cities/oberasbach.json",
+      "fileSize": 573142,
+      "title": "Oberasbach – geprüftes Trainingspaket",
+      "source": "curated"
+    },
+    {
+      "id": "de-by-zirndorf",
+      "name": "Zirndorf",
+      "displayName": "Zirndorf",
+      "datasetKind": "municipality",
+      "state": "Bayern",
+      "district": null,
+      "country": "Deutschland",
+      "postalCodes": [],
+      "cityId": "osm-relation-3351257",
+      "osmType": "relation",
+      "osmRelationId": 3351257,
+      "packageType": "osm",
+      "version": "2026.09.05",
+      "contentHash": "sha256:766615fdfddcbea7250d218f3b9f79c5f18e8e3b72fdcf99f7218e4867340f49",
+      "streetCount": 345,
+      "poiCount": 124,
+      "areaCount": 0,
+      "center": {
+        "lat": 49.4351034,
+        "lon": 10.9252483
+      },
+      "bounds": {
+        "south": 49.4033951,
+        "west": 10.8690507,
+        "north": 49.4637363,
+        "east": 10.9859545
+      },
+      "downloadPath": "cities/de-by-zirndorf.json",
+      "fileSize": 911271,
+      "title": "Zirndorf – OpenStreetMap-PBF-Dataset",
+      "source": "osm-pbf"
+    },
+    {
+      "id": "de-nw-koeln",
+      "name": "Köln",
+      "displayName": "Köln",
+      "datasetKind": "municipality",
+      "state": "Nordrhein-Westfalen",
+      "district": null,
+      "country": "Deutschland",
+      "postalCodes": [],
+      "cityId": "osm-relation-62578",
+      "osmType": "relation",
+      "osmRelationId": 62578,
+      "packageType": "osm",
+      "version": "2026.09.05",
+      "contentHash": "sha256:82533736b96d1734aca82aa3f3829552c80dfad923348a4cc1f73a4068b047b2",
+      "streetCount": 4628,
+      "poiCount": 4453,
+      "areaCount": 101,
+      "center": {
+        "lat": 50.9456259,
+        "lon": 6.9736991
+      },
+      "bounds": {
+        "south": 50.8304399,
+        "west": 6.7725303,
+        "north": 51.0849743,
+        "east": 7.162028
+      },
+      "downloadPath": "cities/de-nw-koeln.json",
+      "fileSize": 22824564,
+      "title": "Köln – OpenStreetMap-PBF-Dataset",
+      "source": "osm-pbf"
+    },
+    {
+      "id": "de-nw-olpe",
+      "name": "Olpe",
+      "displayName": "Olpe",
+      "datasetKind": "municipality",
+      "state": "Nordrhein-Westfalen",
+      "district": null,
+      "country": "Deutschland",
+      "postalCodes": [],
+      "cityId": "osm-relation-163179",
+      "osmType": "relation",
+      "osmRelationId": 163179,
+      "packageType": "osm",
+      "version": "2026.09.05",
+      "contentHash": "sha256:6c89d676e575f2d69301715c3be5e8e66b5a798afc21b73495671fa33d996269",
+      "streetCount": 461,
+      "poiCount": 114,
+      "areaCount": 2,
+      "center": {
+        "lat": 51.0395968,
+        "lon": 7.8863866
+      },
+      "bounds": {
+        "south": 50.98689,
+        "west": 7.8040829,
+        "north": 51.0878047,
+        "east": 7.9741967
+      },
+      "downloadPath": "cities/de-nw-olpe.json",
+      "fileSize": 1328294,
+      "title": "Olpe – OpenStreetMap-PBF-Dataset",
+      "source": "osm-pbf"
+    },
+    {
+      "id": "de-nw-siegen",
+      "name": "Siegen",
+      "displayName": "Siegen",
+      "datasetKind": "municipality",
+      "state": "Nordrhein-Westfalen",
+      "district": null,
+      "country": "Deutschland",
+      "postalCodes": [],
+      "cityId": "osm-relation-163256",
+      "osmType": "relation",
+      "osmRelationId": 163256,
+      "packageType": "osm",
+      "version": "2026.09.05",
+      "contentHash": "sha256:f3d357f23ca65ea9d6fbb14dbd254d4e8955cb3ccaa3359786757fa87f4e95bb",
+      "streetCount": 1176,
+      "poiCount": 426,
+      "areaCount": 23,
+      "center": {
+        "lat": 50.8810253,
+        "lon": 8.0115234
+      },
+      "bounds": {
+        "south": 50.8114072,
+        "west": 7.9215923,
+        "north": 50.9513102,
+        "east": 8.1279162
+      },
+      "downloadPath": "cities/de-nw-siegen.json",
+      "fileSize": 4179180,
+      "title": "Siegen – OpenStreetMap-PBF-Dataset",
+      "source": "osm-pbf"
+    },
+    {
+      "id": "de-nw-wenden",
+      "name": "Wenden",
+      "displayName": "Wenden",
+      "datasetKind": "municipality",
+      "state": "Nordrhein-Westfalen",
+      "district": null,
+      "country": "Deutschland",
+      "postalCodes": [],
+      "cityId": "osm-relation-160880",
+      "osmType": "relation",
+      "osmRelationId": 160880,
+      "packageType": "osm",
+      "version": "2026.09.05",
+      "contentHash": "sha256:a5e0edb8deb7e3cee8e7e0b0864e7e533c44ed76b5a1dc319526ff66149be6f4",
+      "streetCount": 460,
+      "poiCount": 37,
+      "areaCount": 3,
+      "center": {
+        "lat": 50.9632524,
+        "lon": 7.8635872
+      },
+      "bounds": {
+        "south": 50.9245678,
+        "west": 7.7797408,
+        "north": 51.0034247,
+        "east": 7.9420652
+      },
+      "downloadPath": "cities/de-nw-wenden.json",
+      "fileSize": 987422,
+      "title": "Wenden – OpenStreetMap-PBF-Dataset",
+      "source": "osm-pbf"
+    }
+  ]
+}

@@ -1,0 +1,31 @@
+{
+  "schemaVersion": 1,
+  "datasetId": "de-nw-olpe",
+  "name": "Olpe",
+  "displayName": "Olpe",
+  "version": "2026.09.05",
+  "contentHash": "sha256:6c89d676e575f2d69301715c3be5e8e66b5a798afc21b73495671fa33d996269",
+  "publishedAt": "2026-09-06T21:23:06.199Z",
+  "counts": {
+    "streetCount": 461,
+    "poiCount": 114,
+    "areaCount": 2
+  },
+  "files": {
+    "package": {
+      "path": "package.json",
+      "sizeBytes": 1328294,
+      "sha256": "c7ec27957cd868737c7761b650b11aeab5e602559417b987ea52399f7d6150ed"
+    },
+    "gzip": {
+      "path": "package.json.gz",
+      "sizeBytes": 137148,
+      "sha256": "ea7e9b1b1db4146272be4ef241ca0dd8d4f90d94a1d80243fce50a7b6120b7b9"
+    },
+    "brotli": {
+      "path": "package.json.br",
+      "sizeBytes": 94954,
+      "sha256": "cd24d7475f9781f9a2d5a930540a3fe150ce7731b271c41ad386a1e5747dba31"
+    }
+  }
+}

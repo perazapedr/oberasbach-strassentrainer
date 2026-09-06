@@ -21,15 +21,25 @@ const MIME_TYPES = {
   ".ico": "image/x-icon"
 };
 
-function startStaticServer() {
+function startStaticServer(options = {}) {
+  const useCandidateCatalog = Boolean(options.useCandidateCatalog);
   return new Promise((resolve, reject) => {
     const server = http.createServer((req, res) => {
       try {
         const parsedUrl = new URL(req.url, "http://localhost");
-        let filePath = path.join(ROOT, decodeURIComponent(parsedUrl.pathname));
-        if (parsedUrl.pathname === "/" || parsedUrl.pathname === "") {
+        const pathname = decodeURIComponent(parsedUrl.pathname);
+        let filePath;
+
+        if (useCandidateCatalog && pathname === "/data/catalog.json") {
+          filePath = path.join(ROOT, "tests/fixtures/multi-region-candidate-catalog.json");
+        } else if (useCandidateCatalog && (pathname === "/data/cities/de-by-zirndorf.json" || pathname === "/cities/de-by-zirndorf.json")) {
+          filePath = path.join(ROOT, "tests/fixtures/de-by-zirndorf.json");
+        } else if (pathname === "/" || pathname === "") {
           filePath = path.join(ROOT, "index.html");
+        } else {
+          filePath = path.join(ROOT, pathname);
         }
+
         if (!fs.existsSync(filePath) || fs.statSync(filePath).isDirectory()) {
           res.writeHead(404, { "Content-Type": "text/plain" });
           res.end("Not Found");
@@ -263,23 +273,51 @@ async function installAndPlayCity(cdp, cityName, expectedCounts = null) {
   }
   console.log(`✓ Freie Runde in ${cityName} erfolgreich gestartet.`);
 
+  // 13. Reale Interaktion: Guess & Score im Browser ausführen
+  console.log(`Führe Karten-Tipp (Guess) für ${cityName} aus...`);
+  const activeCenter = await cdp.eval(`(() => {
+    const center = map.getCenter();
+    return { lat: center.lat, lng: center.lng };
+  })()`);
+  await cdp.eval(`(() => {
+    map.fire("click", { latlng: L.latLng(${activeCenter.lat}, ${activeCenter.lng}) });
+    return true;
+  })()`);
+  await delay(600);
+
+  const scoreText = await cdp.eval(`(() => {
+    const el = document.getElementById("scoreValue");
+    return el ? el.textContent.trim() : "";
+  })()`);
+  const distanceText = await cdp.eval(`(() => {
+    const el = document.getElementById("distanceValue");
+    return el ? el.textContent.trim() : "";
+  })()`);
+  console.log(`✓ Tipp ausgewertet für ${cityName}: Distanz "${distanceText}", Punkte "${scoreText}".`);
+  if (!scoreText) {
+    throw new Error(`Keine Punkte/Score nach Tipp für ${cityName} berechnet!`);
+  }
+
   // Stoppe die Runde sauber für den nächsten Test
   await cdp.eval(`(() => {
     const btn = document.getElementById("mainButton");
-    if (btn && btn.textContent.includes("Abbrechen")) btn.click();
+    if (btn && (btn.textContent.includes("Abbrechen") || btn.textContent.includes("Nächster"))) btn.click();
   })()`);
   await delay(300);
 }
 
-async function runOfflineSmokeTest(cdp, port) {
+async function runOfflineSmokeTest(cdp, port, targetCity = "Olpe") {
   console.log("\n===============================================================");
-  console.log("=== STARTE P15-BASELINE-OFFLINE-SMOKE ===");
+  console.log(`=== STARTE OFFLINE-SMOKE FÜR "${targetCity}" ===`);
   console.log("===============================================================");
 
-  // 1. Olpe online installieren (falls noch nicht aktiv)
+  // 1. Stadt online installieren (falls noch nicht aktiv)
   const currentActive = await cdp.eval(`document.getElementById("activeCityName")?.textContent.trim() || ""`);
-  if (!currentActive.includes("Olpe")) {
-    await installAndPlayCity(cdp, "Olpe", { streets: 461, pois: 114 });
+  if (!currentActive.includes(targetCity)) {
+    const expected = targetCity === "Zirndorf"
+      ? { streets: 345, pois: 124 }
+      : (targetCity === "Olpe" ? { streets: 461, pois: 114 } : null);
+    await installAndPlayCity(cdp, targetCity, expected);
   }
 
   // 2. Warte auf ServiceWorker-Registrierung und Vorbereitung
@@ -320,16 +358,16 @@ async function runOfflineSmokeTest(cdp, port) {
   }`, 25000);
   console.log("✓ Anwendung offline erfolgreich aus Cache initialisiert.");
 
-  // 6. Verifiziere aktive Stadt ist weiterhin Olpe
+  // 6. Verifiziere aktive Stadt ist weiterhin targetCity
   const activeCityOffline = await cdp.eval(`document.getElementById("activeCityName")?.textContent.trim() || ""`);
   console.log(`Aktive Stadt nach Offline-Reload: "${activeCityOffline}"`);
-  if (!activeCityOffline.includes("Olpe")) {
-    throw new Error(`Offline-Reload verlor aktive Stadt! Erhalten: "${activeCityOffline}"`);
+  if (!activeCityOffline.includes(targetCity)) {
+    throw new Error(`Offline-Reload verlor aktive Stadt! Erwartet: "${targetCity}", erhalten: "${activeCityOffline}"`);
   }
-  console.log("✓ Olpe erfolgreich aus IndexedDB wiederhergestellt.");
+  console.log(`✓ ${targetCity} erfolgreich aus IndexedDB wiederhergestellt.`);
 
   // 7. Starte freie Runde im Offline-Modus
-  console.log("Starte freie Trainingsrunde offline...");
+  console.log(`Starte freie Trainingsrunde offline für ${targetCity}...`);
   await cdp.eval(`document.getElementById("mainButton").click()`);
   await delay(500);
 
@@ -337,7 +375,7 @@ async function runOfflineSmokeTest(cdp, port) {
     const el = document.getElementById("targetStreet");
     return el ? el.textContent.trim() : "";
   })()`);
-  console.log(`Offline-Rundenziel in Olpe: "${targetOffline}"`);
+  console.log(`Offline-Rundenziel in ${targetCity}: "${targetOffline}"`);
   if (!targetOffline) {
     throw new Error("Offline-Runde konnte kein Ziel generieren!");
   }
@@ -357,14 +395,15 @@ async function runOfflineSmokeTest(cdp, port) {
   });
 
   console.log("===============================================================");
-  console.log("✓ P15-BASELINE-OFFLINE-SMOKE: VOLLSTÄNDIGER PASS!");
+  console.log(`✓ OFFLINE-SMOKE FÜR "${targetCity}": VOLLSTÄNDIGER PASS!`);
   console.log("===============================================================\n");
 }
 
 async function runSmokeTests() {
   const args = process.argv.slice(2);
   const runOffline = args.includes("--offline");
-  const runAll = args.includes("--all") || args.length === 0;
+  const useCandidateCatalog = args.includes("--candidate") || args.includes("Zirndorf");
+  const runAll = args.includes("--all") || (args.length === 0 && !args.includes("--city"));
   let targetCities = [];
 
   if (runAll) {
@@ -376,22 +415,30 @@ async function runSmokeTests() {
   } else {
     for (let i = 0; i < args.length; i++) {
       if (args[i] === "--city" && args[i + 1]) {
-        targetCities.push({ name: args[++i], expected: null });
+        const cName = args[++i];
+        const exp = cName === "Zirndorf"
+          ? { streets: 345, pois: 124 }
+          : (cName === "Wenden" ? { streets: 460, pois: 37 } : null);
+        targetCities.push({ name: cName, expected: exp });
       } else if (!args[i].startsWith("--")) {
-        targetCities.push({ name: args[i], expected: null });
+        const cName = args[i];
+        const exp = cName === "Zirndorf"
+          ? { streets: 345, pois: 124 }
+          : (cName === "Wenden" ? { streets: 460, pois: 37 } : null);
+        targetCities.push({ name: cName, expected: exp });
       }
     }
   }
 
-  console.log("=== Starte Phase 15.7 Browser Smoke Tests mit Headless Chrome ===");
+  console.log("=== Starte Phase 15.7 / 16 Browser Smoke Tests mit Headless Chrome ===");
   if (runOffline) {
-    console.log("Modus: P15-BASELINE-OFFLINE-SMOKE");
+    console.log("Modus: OFFLINE-SMOKE");
   } else {
     console.log(`Zielstädte: ${targetCities.map(c => c.name).join(", ")}`);
   }
 
-  const { server, port } = await startStaticServer();
-  console.log(`Lokaler HTTP-Server läuft auf Port ${port}`);
+  const { server, port } = await startStaticServer({ useCandidateCatalog });
+  console.log(`Lokaler HTTP-Server läuft auf Port ${port} (CandidateCatalog: ${useCandidateCatalog})`);
 
   let chromeProcess = null;
   let cdp = null;
@@ -444,7 +491,7 @@ async function runSmokeTests() {
         catalogRequests++;
         console.log(`[NETZWERK] Katalog abgerufen: ${url}`);
       }
-      if (url.includes("data/cities/")) {
+      if (url.includes("data/cities/") || url.includes("cities/") || url.includes("zirndorf")) {
         packageRequests++;
         console.log(`[NETZWERK] Stadtpaket abgerufen: ${url}`);
       }
@@ -464,7 +511,9 @@ async function runSmokeTests() {
 
     // Führe Offline-Smoke durch falls angefordert oder bei Default
     if (runOffline) {
-      await runOfflineSmokeTest(cdp, port);
+      const activeCity = await cdp.eval(`document.getElementById("activeCityName")?.textContent.trim() || ""`);
+      const offlineTarget = activeCity || (targetCities.length > 0 ? targetCities[targetCities.length - 1].name : "Olpe");
+      await runOfflineSmokeTest(cdp, port, offlineTarget);
     }
 
     // Netzwerk-Audit

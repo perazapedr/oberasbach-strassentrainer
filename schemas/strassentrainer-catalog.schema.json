@@ -192,6 +192,29 @@
           "type": "string",
           "maxLength": 120,
           "description": "Optionale Quellenbezeichnung des Pakets."
+        },
+        "packageUrl": {
+          "type": "string",
+          "description": "Portabler Download-Pfad oder URL zum JSON-Paket."
+        },
+        "manifestUrl": {
+          "type": "string",
+          "description": "Portabler Pfad oder URL zum Datensatz-Manifest."
+        },
+        "sizeBytes": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Dateigröße des Package-JSON in Bytes."
+        },
+        "gzipSizeBytes": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Gzip-komprimierte Größe des Pakets in Bytes."
+        },
+        "brotliSizeBytes": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Brotli-komprimierte Größe des Pakets in Bytes."
         }
       },
       "additionalProperties": false

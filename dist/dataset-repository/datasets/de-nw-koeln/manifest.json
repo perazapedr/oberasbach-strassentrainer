@@ -1,0 +1,31 @@
+{
+  "schemaVersion": 1,
+  "datasetId": "de-nw-koeln",
+  "name": "Köln",
+  "displayName": "Köln",
+  "version": "2026.09.05",
+  "contentHash": "sha256:82533736b96d1734aca82aa3f3829552c80dfad923348a4cc1f73a4068b047b2",
+  "publishedAt": "2026-09-06T21:23:06.199Z",
+  "counts": {
+    "streetCount": 4628,
+    "poiCount": 4453,
+    "areaCount": 101
+  },
+  "files": {
+    "package": {
+      "path": "package.json",
+      "sizeBytes": 22824564,
+      "sha256": "21ff765be41520bf53b5b20e0510c3e43d9d865659e8ae3bda8e8f3e6a4de01d"
+    },
+    "gzip": {
+      "path": "package.json.gz",
+      "sizeBytes": 2354622,
+      "sha256": "312028c38c18f846bddf34aa55ed010b0da11e7bc8118102b8910c12aad41c11"
+    },
+    "brotli": {
+      "path": "package.json.br",
+      "sizeBytes": 1462913,
+      "sha256": "322b95431a80e5a1e1c9659eb3bd80c593003cd00ccdd0a7a881c0efa66fa5c3"
+    }
+  }
+}

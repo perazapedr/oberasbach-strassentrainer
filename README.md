@@ -412,4 +412,30 @@ Seit Phase 15.5 und 15.6 ist der **CatalogDatasetProvider** der produktive Stand
 
 Das eigentliche Spiel liest Straßen, POIs und Geometrien ausschließlich lokal aus IndexedDB und funktioniert offline vollständig ohne externe Server.
 
+### Automatisierte Dataset-Pipeline & Deutschlandweite Infrastruktur (Phasen 15.8 & 16)
+
+Für die kontinuierliche Erstellung, Qualitätssicherung und Veröffentlichung von Städten aus OpenStreetMap-PBF-Extrakten steht das CLI-Tool `tools/dataset-pipeline/` zur Verfügung:
+- **Deklarative Bundesland-Konfiguration**: `regions.json` definiert Metadaten für alle Regionen (z. B. `de-nw`, `de-by`).
+- **Entkoppelte Manifeste**: `manifests/<regionId>.json` definiert Zielgemeinden und OSM-Relations.
+- **Schnelle Relation-Discovery**: `node tools/dataset-pipeline/index.js --pbf <file.osm.pbf> --discover` listet alle administrativen Einheiten einer Region auf.
+- **Staging-Isolation & Atomarität**: Builds laufen isoliert in einem temporären Staging-Verzeichnis. Bei Erfolg werden Pakete atomar nach `data/cities/` und der aktualisierte Katalog nach `data/catalog.json` promoviert.
+- **Multi-Stage QA Policy**: `qa-policy.json` erzwingt strikte Schwellenwerte, Geometrie-Checks und die automatische Zurückweisung unzulässiger Nachbargemeinden (Area QA).
+- **Golden Master Schutz**: Oberasbach ist geschützt (`OBERASBACH_PROTECTED`), verbleibt unberührt im Katalog und wird niemals durch PBF-Builds überschrieben.
+
+### Performance, Kompression & Statisches Dataset-Repository (Phasen 16.1 & 16.2)
+
+Mit den Phasen 16.1 und 16.2 wurden fundierte Performance- und Kompressionsanalysen durchgeführt und ein produktives statisches Dataset-Repository etabliert:
+- **Benchmark & Kompressionsanalyse (`tools/dataset-benchmark/`)**:
+  - Gzip (Level 6) reduziert die Downloadgröße konsistent um **~89 %**, Brotli (Quality 11) um **~93 %**.
+  - Selbst Großstädte wie Köln (22,8 MB raw) reduzieren sich auf 2,48 MB (Gzip) bzw. 1,43 MB (Brotli).
+  - Koordinatenpräzisions-Reduktion (Rundung von 7 auf 5 Nachkommastellen) spart lediglich ~2,5–3,5 %, bricht jedoch kryptografische Hashes und führt zu Punktabzügen im Gameplay. Die Koordinatenpräzision verbleibt daher unverändert bei den Originalwerten.
+- **Statisches Dataset-Repository (`dist/dataset-repository/`)**:
+  - Bereitstellung von `catalog.json` (Root-Index) und `datasets/<id>/` mit `package.json`, `manifest.json`, `package.json.gz` und `package.json.br`.
+  - Vollständig statisch hostbar auf GitHub Pages, AWS S3 / CloudFront, Cloudflare Pages oder Nginx (siehe [docs/dataset-repository-deployment.md](docs/dataset-repository-deployment.md)).
+- **Publisher CLI (`tools/dataset-publisher/`)**:
+  - `node tools/dataset-publisher/index.js` validiert alle Pakete, generiert Manifeste mit SHA-256-Hashes, berechnet Gzip/Brotli-Vorkompressionen und promoviert atomar mit Rollback.
+  - Path-Traversal-Schutz und strikte Validierung vor Veröffentlichung.
+- **In-Browser Verifikation via Chrome CDP**:
+  - E2E-Tests in realem Headless Chrome (`scripts/browser-publisher-repository-test.js`): On-Demand-Installation und fehlerfreies Gameplay für Wenden, Köln und Zirndorf, 0 Anfragen an Nominatim/Overpass, vollständige Offline-Fähigkeit nach Reload, automatische Update-Erkennung und Abweisung manipulierter Pakete.
+
 Kartendaten © OpenStreetMap-Mitwirkende, ODbL. Kartenstil © CARTO.

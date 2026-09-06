@@ -1,0 +1,15 @@
+{
+  "schemaVersion": 1,
+  "regionId": "de-by",
+  "description": "Bayern kommunale Trainingspakete",
+  "datasets": [
+    {
+      "datasetId": "de-by-zirndorf",
+      "name": "Zirndorf",
+      "relationId": 3351257,
+      "adminLevel": 8,
+      "enabled": true
+    }
+  ]
+}
+

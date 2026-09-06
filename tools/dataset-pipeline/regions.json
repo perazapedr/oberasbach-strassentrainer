@@ -1,0 +1,18 @@
+{
+  "schemaVersion": 1,
+  "regions": {
+    "de-nw": {
+      "regionId": "de-nw",
+      "country": "Deutschland",
+      "state": "Nordrhein-Westfalen",
+      "stateCode": "NW"
+    },
+    "de-by": {
+      "regionId": "de-by",
+      "country": "Deutschland",
+      "state": "Bayern",
+      "stateCode": "BY"
+    }
+  }
+}
+
