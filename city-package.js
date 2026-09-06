@@ -113,6 +113,15 @@
       || codes.has("AREA_BOUNDS_INVALID") || codes.has("AREA_CENTER_INVALID")) {
       return "Die Stadtdatei enthält ungültige Kartengrenzen oder Koordinaten.";
     }
+    if (codes.has("CITY_BOUNDARY_MISSING")) {
+      return "Die administrative Gemeindegrenze fehlt im Stadtpaket.";
+    }
+    if (codes.has("CITY_BOUNDARY_INVALID")) {
+      return "Die administrative Gemeindegrenze ist geometrisch ungültig.";
+    }
+    if (codes.has("PROVENANCE_SOURCE_PBF_ABSOLUTE")) {
+      return "Die Quellpfadangabe in der Provenienz darf keine absoluten Pfade enthalten.";
+    }
     return "Die Stadtdatei verwendet ein nicht unterstütztes Format oder enthält ungültige Daten.";
   }
 
@@ -160,8 +169,18 @@
       streets,
       pois
     };
+    const boundary = packageOptions.boundary || city?.boundary;
+    if (boundary) {
+      candidate.boundary = boundary;
+    }
     if (hasAreas) {
       candidate.areas = areas;
+    }
+    if (packageOptions.provenance || city?.provenance) {
+      candidate.provenance = packageOptions.provenance || city?.provenance;
+    }
+    if (packageOptions.build || city?.build) {
+      candidate.build = packageOptions.build || city?.build;
     }
     if (pkg) {
       candidate.package = pkg;
@@ -184,11 +203,20 @@
       streets: validated.streets,
       pois: validated.pois
     };
+    if (validated.boundary) {
+      result.boundary = validated.boundary;
+    }
     if (hasAreas) {
       result.areas = validated.areas || [];
     }
     if (validated.package && !validated.package.legacy) {
       result.package = validated.package;
+    }
+    if (validated.provenance) {
+      result.provenance = validated.provenance;
+    }
+    if (validated.build) {
+      result.build = validated.build;
     }
     return result;
   }

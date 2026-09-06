@@ -1,0 +1,74 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-09-06T12:00:00.000Z",
+  "datasets": [
+    {
+      "id": "de-oberasbach-fire-training",
+      "name": "Oberasbach",
+      "displayName": "Oberasbach",
+      "datasetKind": "municipality",
+      "state": "Bayern",
+      "district": "Landkreis Fürth",
+      "country": "Deutschland",
+      "postalCodes": [
+        "90522"
+      ],
+      "cityId": "osm-relation-1016396",
+      "osmType": "relation",
+      "osmRelationId": 1016396,
+      "packageType": "curated",
+      "version": "1.0.0",
+      "contentHash": "sha256:1a0854340fa6519d7a3947b0726767e45aca323dfeaadaefff999801bb921b95",
+      "streetCount": 271,
+      "poiCount": 60,
+      "areaCount": 0,
+      "center": {
+        "lat": 49.4236043,
+        "lon": 10.9708709
+      },
+      "bounds": {
+        "south": 49.4017231,
+        "west": 10.9384173,
+        "north": 49.4454542,
+        "east": 10.9987491
+      },
+      "downloadPath": "cities/oberasbach.json",
+      "fileSize": 573142,
+      "title": "Oberasbach – geprüftes Trainingspaket",
+      "source": "curated"
+    },
+    {
+      "id": "de-nw-olpe",
+      "name": "Olpe",
+      "displayName": "Olpe",
+      "datasetKind": "municipality",
+      "state": "Nordrhein-Westfalen",
+      "district": null,
+      "country": "Deutschland",
+      "postalCodes": [],
+      "cityId": "osm-relation-163179",
+      "osmType": "relation",
+      "osmRelationId": 163179,
+      "packageType": "osm",
+      "version": "2026.09.05",
+      "contentHash": "sha256:6c89d676e575f2d69301715c3be5e8e66b5a798afc21b73495671fa33d996269",
+      "streetCount": 461,
+      "poiCount": 114,
+      "areaCount": 2,
+      "center": {
+        "lat": 51.0395968,
+        "lon": 7.8863866
+      },
+      "bounds": {
+        "south": 50.98689,
+        "west": 7.8040829,
+        "north": 51.0878047,
+        "east": 7.9741967
+      },
+      "downloadPath": "cities/de-nw-olpe.json",
+      "fileSize": 1328294,
+      "title": "Olpe – OpenStreetMap-PBF-Dataset",
+      "source": "osm-pbf"
+    }
+  ]
+}

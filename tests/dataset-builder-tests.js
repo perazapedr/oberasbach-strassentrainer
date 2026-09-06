@@ -145,7 +145,7 @@ test("Fixture-PBF durchläuft Builder, Package-Validator, Provider, IndexedDB un
     const report = JSON.parse(fs.readFileSync(reportPath, "utf8"));
     assert.equal(report.status, "PASS");
     assert.equal(packageData.city.id, "osm-relation-100");
-    assert.equal(packageData.boundary.type, "MultiPolygon");
+    assert.equal(packageData.boundary.type, "Polygon");
     assert.ok(packageData.streets.length >= 5);
     assert.ok(packageData.pois.some(poi => poi.osmType === "node"));
     assert.ok(packageData.pois.some(poi => poi.osmType === "relation"));

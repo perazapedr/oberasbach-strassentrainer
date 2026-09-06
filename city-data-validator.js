@@ -1064,9 +1064,11 @@
   }
 
   function parseSemver(str) {
-    const match = String(str || "").trim().match(/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/);
+    const match = String(str || "").trim().match(/^(\d+)\.(\d+)\.(\d+)(?:\.(\d+))?$/);
     if (!match) return null;
-    return [Number(match[1]), Number(match[2]), Number(match[3])];
+    const base = [Number(match[1]), Number(match[2]), Number(match[3])];
+    if (match[4] !== undefined) base.push(Number(match[4]));
+    return base;
   }
 
   function comparePackageVersions(a, b) {
@@ -1075,9 +1077,12 @@
     if (!parsedA || !parsedB) {
       throw new Error(`Ungültige Paketversion für Versionsvergleich: "${a}" bzw. "${b}".`);
     }
-    for (let i = 0; i < 3; i++) {
-      if (parsedA[i] !== parsedB[i]) {
-        return parsedA[i] > parsedB[i] ? 1 : -1;
+    const len = Math.max(parsedA.length, parsedB.length);
+    for (let i = 0; i < len; i++) {
+      const valA = parsedA[i] !== undefined ? parsedA[i] : 0;
+      const valB = parsedB[i] !== undefined ? parsedB[i] : 0;
+      if (valA !== valB) {
+        return valA > valB ? 1 : -1;
       }
     }
     return 0;
@@ -1194,6 +1199,7 @@
     const validation = importedPackageValidationResult(inputIsObject ? cityPackage : null);
     const input = inputIsObject ? cityPackage : null;
     const rawCityId = trimmedString(input?.city?.id) || null;
+    let boundaryInput = null;
 
     if (!input) {
       addMunicipalityError(validation, "CITY_PACKAGE_INVALID", null,
@@ -1241,6 +1247,15 @@
           if (pkgType !== "curated" && pkgType !== "osm" && pkgType !== "imported") {
             addPackageIssue(validation, "PACKAGE_TYPE_INVALID", rawCityId,
               `Der Pakettyp "${pkgType}" ist unzulässig. Gültig sind "curated" oder "osm".`);
+          }
+
+          if (pkg.datasetKind !== undefined) {
+            const kind = trimmedString(pkg.datasetKind);
+            const validKinds = ["municipality", "city", "district", "custom", "curated"];
+            if (!kind || !validKinds.includes(kind)) {
+              addPackageIssue(validation, "PACKAGE_DATASET_KIND_INVALID", rawCityId,
+                "Der Datensatztyp (datasetKind) ist ungültig.");
+            }
           }
 
           if (pkgType === "curated") {
@@ -1333,6 +1348,56 @@
         if (!validPosition(city.center)) {
           addMunicipalityError(validation, "CITY_CENTER_INVALID", rawCityId,
             "Der Stadtmittelpunkt ist ungültig.");
+        }
+      }
+
+      boundaryInput = input.boundary !== undefined ? input.boundary : input.city?.boundary;
+      if (boundaryInput !== undefined && boundaryInput !== null) {
+        if (!validAreaGeometry(boundaryInput)) {
+          addMunicipalityError(validation, "CITY_BOUNDARY_INVALID", rawCityId,
+            "Die administrative Gemeindegrenze ist geometrisch ungültig.");
+        }
+      } else {
+        addMunicipalityWarning(validation, "CITY_BOUNDARY_MISSING", rawCityId,
+          "Die administrative Gemeindegrenze fehlt im Stadtpaket.");
+      }
+
+      if (input.boundary && input.city?.boundary && JSON.stringify(input.boundary) !== JSON.stringify(input.city.boundary)) {
+        addMunicipalityWarning(validation, "CITY_BOUNDARY_SOURCE_CONFLICT", rawCityId,
+          "Das Paket enthält widersprüchliche Grenzen auf Top-Level und in den Stadtmetadaten. Die Top-Level-Grenze wird verwendet.");
+      }
+
+      if (input.provenance !== undefined) {
+        const prov = input.provenance;
+        if (!prov || typeof prov !== "object" || Array.isArray(prov)) {
+          addMunicipalityWarning(validation, "PROVENANCE_METADATA_INVALID", rawCityId,
+            "Die Provenienzmetadaten sind ungültig.");
+        } else {
+          if (prov.sourcePbf && typeof prov.sourcePbf === "string") {
+            const trimmedPbf = prov.sourcePbf.trim();
+            if (/^([/\\]|[a-z]:)/i.test(trimmedPbf) || trimmedPbf.includes("/") || trimmedPbf.includes("\\")) {
+              addMunicipalityError(validation, "PROVENANCE_SOURCE_PBF_ABSOLUTE", rawCityId,
+                "Der Quell-PBF-Dateiname darf keine Pfadangaben enthalten.");
+            }
+          }
+          if (prov.osmDataTimestamp !== undefined) {
+            const ts = trimmedString(prov.osmDataTimestamp);
+            if (!ts || !Number.isFinite(Date.parse(ts))) {
+              addMunicipalityWarning(validation, "PROVENANCE_TIMESTAMP_INVALID", rawCityId,
+                "Der OSM-Datenzeitstempel in der Provenienz ist ungültig.");
+            }
+          }
+        }
+      }
+
+      if (input.build !== undefined) {
+        const bld = input.build;
+        if (!bld || typeof bld !== "object" || Array.isArray(bld)) {
+          addMunicipalityWarning(validation, "BUILD_METADATA_INVALID", rawCityId,
+            "Die Build-Metadaten sind ungültig.");
+        } else if (bld.warnings !== undefined && !Array.isArray(bld.warnings)) {
+          addMunicipalityWarning(validation, "BUILD_WARNINGS_INVALID", rawCityId,
+            "Die Build-Warnungen müssen ein Array sein.");
         }
       }
 
@@ -1465,6 +1530,9 @@
         } : { status: "unverified" },
         contentHash: trimmedString(p.contentHash) || null
       };
+      if (p.datasetKind !== undefined) {
+        normalizedPackage.datasetKind = trimmedString(p.datasetKind);
+      }
       if (p.legacy) {
         normalizedPackage.legacy = true;
       }
@@ -1494,9 +1562,14 @@
       exportedAt: input?.exportedAt,
       package: valid ? normalizedPackage : null,
       city: resultCity,
+      boundary: valid && boundaryInput && validAreaGeometry(boundaryInput)
+        ? cloneValue(boundaryInput)
+        : null,
       streets: valid ? cloneValue(input.streets) : [],
       pois: valid ? cloneValue(input.pois) : [],
       areas: valid && Array.isArray(input?.areas) ? cloneValue(input.areas) : [],
+      provenance: valid && input?.provenance ? cloneValue(input.provenance) : null,
+      build: valid && input?.build ? cloneValue(input.build) : null,
       validation
     };
   }

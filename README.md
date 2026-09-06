@@ -399,6 +399,15 @@ Für Phase 14.4b muss die derzeitige Annahme „installierter Datensatz = genau 
 - **Online**: Gewohntes, detailreiches Kartenbild über den beschriftungsfreien CARTO-Kachelstil (`_nolabels`).
 - **Offline**: Autarke lokale Orientierungskarte über einen performanten Canvas-Vektorlayer (`offline-basemap.js`), der die in IndexedDB gespeicherten Straßengeometrien und Gemeindegrenzen ohne externe Kacheln und ohne Netzwerkzugriff rendert. Bei Netzausfall oder Kachelfehlern schaltet die Anwendung automatisch auf die lokale Vektor-Basiskarte um.
 
-Der City Manager spricht seit Phase 15.1 ausschließlich mit einem `DatasetProvider`. Der produktive Standardprovider kapselt weiterhin den bestehenden Nominatim-/Overpass-Pfad; ein austauschbarer Static Provider belegt zusätzlich die lokale Installation ohne diese Dienste. Das eigentliche Spiel liest Straßen, POIs und Geometrien ausschließlich lokal aus IndexedDB und funktioniert offline vollständig ohne externe Server.
+### Katalogbasierte Installation ohne Overpass
+
+Seit Phase 15.5 ist der **CatalogDatasetProvider** der produktive Standard-Provider für die Installation neuer Städte:
+- **Katalogsuche**: Die Suche nach Städten und Trainingsgebieten erfolgt über den statischen Katalog (`data/catalog.json`).
+- **Kryptographische Integrität**: Beim Download eines Stadtpakets (`data/cities/*.json`) wird das Paket auf Katalog-Hash-Übereinstimmung, SHA-256-Integrität (`verifyPackageHash`), Schema-Konformität (`schemaVersion: 1`) sowie spielbare Straßen und POIs validiert.
+- **Transaktionales Speichern**: Erst nach erfolgreicher Gesamtvalidierung werden Daten atomar in IndexedDB geschrieben.
+- **Keine externen APIs im Normalbetrieb**: Bei der Suche, der Vorschau, dem Download, der Installation und dem Spielen werden **0 Aufrufe an Nominatim** und **0 Aufrufe an die Overpass API** abgesetzt.
+- **Legacy-OSM-Pfad**: Der bestehende `LegacyOsmDatasetProvider` (mit Nominatim und Overpass) bleibt im Code als technischer Fallback erhalten, ist aber nicht mehr Standard.
+
+Das eigentliche Spiel liest Straßen, POIs und Geometrien ausschließlich lokal aus IndexedDB und funktioniert offline vollständig ohne externe Server.
 
 Kartendaten © OpenStreetMap-Mitwirkende, ODbL. Kartenstil © CARTO.

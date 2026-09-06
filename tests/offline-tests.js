@@ -164,6 +164,9 @@ test("5. Service Worker classifyRequest trennt statische Assets, APIs und Tiles 
   assert.equal(sw.classifyRequest({ method: "GET", url: "http://localhost:8080/styles.css" }), "STATIC_ASSET");
   assert.equal(sw.classifyRequest({ method: "GET", url: "http://localhost:8080/vendor/leaflet/leaflet.js" }), "STATIC_ASSET");
   assert.equal(sw.classifyRequest({ method: "GET", url: "http://localhost:8080/data/cities/oberasbach.json" }), "STATIC_ASSET");
+
+  // Katalog -> CATALOG_NETWORK_FIRST
+  assert.equal(sw.classifyRequest({ method: "GET", url: "http://localhost:8080/data/catalog.json" }), "CATALOG_NETWORK_FIRST");
 });
 
 // ---------------------------------------------------------------------------

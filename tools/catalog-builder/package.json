@@ -1,0 +1,12 @@
+{
+  "name": "strassentrainer-catalog-builder",
+  "version": "0.1.0",
+  "description": "Catalog Builder for Straßentrainer Deutschland",
+  "main": "index.js",
+  "scripts": {
+    "build-catalog": "node index.js"
+  },
+  "author": "Straßentrainer",
+  "license": "MIT"
+}
+

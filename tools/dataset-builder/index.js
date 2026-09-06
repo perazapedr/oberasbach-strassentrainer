@@ -108,7 +108,7 @@ function selectBoundaryFeature(collection, relationId) {
     && feature.geometry && ["Polygon", "MultiPolygon"].includes(feature.geometry.type)
   ));
   if (matching.length !== 1) throw new Error(`Expected one valid geometry for municipality relation ${relationId}, found ${matching.length}.`);
-  return core.normalizeAreaGeometry(matching[0].geometry);
+  return core.canonicalizeAreaGeometry(matching[0].geometry);
 }
 
 function phase(message) {

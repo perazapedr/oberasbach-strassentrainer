@@ -120,6 +120,24 @@ function normalizeAreaGeometry(geometry) {
     : null;
 }
 
+function canonicalizeAreaGeometry(geometry) {
+  const normalized = normalizeAreaGeometry(geometry);
+  if (!normalized) return null;
+  if (normalized.type === "MultiPolygon" && Array.isArray(normalized.coordinates) && normalized.coordinates.length === 1) {
+    return { type: "Polygon", coordinates: normalized.coordinates[0] };
+  }
+  return normalized;
+}
+
+function formatDatasetVersion(timestamp) {
+  const date = new Date(timestamp);
+  if (!Number.isFinite(date.getTime())) return "1.0.0";
+  const year = date.getUTCFullYear();
+  const month = String(date.getUTCMonth() + 1).padStart(2, "0");
+  const day = String(date.getUTCDate()).padStart(2, "0");
+  return `${year}.${month}.${day}`;
+}
+
 function geometryBounds(geometry) {
   const bounds = { south: Infinity, west: Infinity, north: -Infinity, east: -Infinity };
   function visit(value) {
@@ -447,10 +465,12 @@ function assemblePackage(options) {
     hasAreas: normalized.areas.length > 0,
     areaCount: normalized.areas.length
   };
+  const datasetVersion = (options && options.version) || formatDatasetVersion(pbfTimestamp);
   const packageMeta = {
     id: municipalityName.toLocaleLowerCase("de-DE") === "olpe" ? "de-nw-olpe" : `osm-relation-${relation.id}`,
     type: "osm",
-    version: BUILDER_VERSION,
+    datasetKind: "municipality",
+    version: datasetVersion,
     title: `${city.displayName} – OpenStreetMap-PBF-Dataset`,
     createdAt: pbfTimestamp,
     updatedAt: pbfTimestamp,
@@ -462,7 +482,7 @@ function assemblePackage(options) {
     exportedAt: pbfTimestamp,
     package: packageMeta,
     city,
-    boundary: normalized.boundary,
+    boundary: canonicalizeAreaGeometry(normalized.boundary) || normalized.boundary,
     streets: normalized.streets.sort((a, b) => a.id.localeCompare(b.id, "de", { numeric: true })),
     pois: normalized.pois.sort((a, b) => a.id.localeCompare(b.id, "de", { numeric: true })),
     areas: normalized.areas.sort((a, b) => a.id.localeCompare(b.id, "de", { numeric: true })),
@@ -472,8 +492,17 @@ function assemblePackage(options) {
       sourcePbf: path.basename(sourcePbf),
       osmDataTimestamp: pbfTimestamp,
       builderVersion: BUILDER_VERSION,
+      generatedAt: pbfTimestamp,
       municipalityRelation: relation.id,
       municipalityKey: city.officialMunicipalityKey
+    },
+    build: {
+      warnings: (allValidationIssues(normalized, "warnings") || []).map(warning => ({
+        code: warning.code,
+        severity: "warning",
+        message: warning.message,
+        entityType: warning.field || "dataset"
+      }))
     }
   };
   packageMeta.contentHash = validator.computePackageHash(packageData);
@@ -506,6 +535,8 @@ module.exports = {
   parseBoundaryRelationOpl,
   selectMunicipalityRelation,
   normalizeAreaGeometry,
+  canonicalizeAreaGeometry,
+  formatDatasetVersion,
   geometryBounds,
   clipLineStringToBoundary,
   collectRelevantFeatures,

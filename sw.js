@@ -28,6 +28,7 @@ const STATIC_ASSETS = [
   "offline-basemap.js",
   "manifest.webmanifest",
   "data/cities/oberasbach.json",
+  "data/catalog.json",
   "vendor/leaflet/leaflet.js",
   "vendor/leaflet/leaflet.css",
   "vendor/leaflet/images/marker-icon.png",
@@ -56,6 +57,10 @@ function classifyRequest(request) {
 
   if (url.hostname.includes("cartocdn.com") || url.hostname.includes("tile.openstreetmap.org")) {
     return "TILE_NETWORK_ONLY";
+  }
+
+  if (url.pathname.endsWith("/data/catalog.json") || url.pathname.endsWith("/catalog.json")) {
+    return "CATALOG_NETWORK_FIRST";
   }
 
   if (request.mode === "navigate") {
@@ -117,6 +122,27 @@ if (typeof self !== "undefined" && "addEventListener" in self && typeof ServiceW
             || await caches.match("index.html", { ignoreSearch: true })
             || await caches.match("./");
           return cached || Response.error();
+        })
+      );
+      return;
+    }
+
+    if (strategy === "CATALOG_NETWORK_FIRST") {
+      event.respondWith(
+        fetch(event.request).then((response) => {
+          if (response && response.ok) {
+            const clone = response.clone();
+            caches.open(STATIC_CACHE).then((cache) => cache.put(event.request, clone));
+          }
+          return response;
+        }).catch(async () => {
+          const cached = await caches.match(event.request, { ignoreSearch: true });
+          if (cached) return cached;
+          return new Response(JSON.stringify({ schemaVersion: 1, generatedAt: new Date().toISOString(), datasets: [] }), {
+            status: 503,
+            statusText: "Catalog unavailable offline",
+            headers: { "Content-Type": "application/json" }
+          });
         })
       );
       return;

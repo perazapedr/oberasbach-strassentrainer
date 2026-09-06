@@ -53,9 +53,16 @@
         ? navigator.onLine
         : true);
 
+    if (code === "CATALOG_HASH_MISMATCH" || code === "PACKAGE_HASH_MISMATCH" || code === "HASH_MISMATCH") {
+      return "Das Datenpaket konnte nicht sicher geprüft werden und wurde nicht installiert.";
+    }
+
     if (context === "search") {
       if (!isOnline) {
         return "Für die Suche nach neuen Städten wird eine Internetverbindung benötigt.\n\nBereits installierte Städte können weiterhin gespielt werden.";
+      }
+      if (code === "CATALOG_UNAVAILABLE") {
+        return "Die Liste verfügbarer Trainingsgebiete konnte momentan nicht geladen werden.\n\nBereits installierte Gebiete können weiterhin gespielt werden.";
       }
       if (code === "TIMEOUT") {
         return "Die Stadtsuche dauert momentan ungewöhnlich lange. Bitte versuche es erneut.";
@@ -82,6 +89,12 @@
     }
 
     if (code === "ABORTED") return "Download wurde abgebrochen. Es wurden keine Stadtdaten gespeichert.";
+    if (code === "DOWNLOAD_FAILED") {
+      return "Das Dataset konnte nicht heruntergeladen werden.";
+    }
+    if (code === "PACKAGE_INVALID") {
+      return "Die heruntergeladenen Stadtdaten konnten nicht sicher verwendet werden. Es wurde nichts gespeichert.";
+    }
     if (code === "NO_STREETS") {
       return "Für diese Gemeinde konnten keine spielbaren Straßen gefunden werden. Es wurde nichts gespeichert.";
     }
@@ -99,6 +112,9 @@
         return "Du bist momentan offline.\n\nFür das Herunterladen neuer Städte wird eine Internetverbindung benötigt. Bereits installierte Städte können weiterhin gespielt werden.";
       }
       return "Der OpenStreetMap-Datendienst konnte momentan nicht erreicht werden.\n\nDeine Internetverbindung scheint grundsätzlich zu bestehen. Bitte versuche den Download in Kürze erneut.";
+    }
+    if (!isOnline) {
+      return "Für die Installation eines neuen Trainingsgebiets wird einmalig eine Internetverbindung benötigt.\n\nBereits installierte Städte können weiterhin gespielt werden.";
     }
     if (code === "HTTP_ERROR" && status === 429) {
       return "Der OpenStreetMap-Datendienst ist momentan stark ausgelastet (sehr viele Anfragen). Bitte warte kurz und versuche es in Kürze erneut.";
@@ -255,7 +271,11 @@
       || (options.osmService && datasetProviderApi
         && typeof datasetProviderApi.createLegacyOsmDatasetProvider === "function"
         ? datasetProviderApi.createLegacyOsmDatasetProvider(options.osmService)
-        : (root && root.StrassentrainerDatasetProvider) || null);
+        : (datasetProviderApi && typeof datasetProviderApi.createCatalogDatasetProvider === "function"
+            ? datasetProviderApi.createCatalogDatasetProvider()
+            : (datasetProviderApi && typeof datasetProviderApi.getDefaultProvider === "function"
+                ? datasetProviderApi.getDefaultProvider()
+                : (root && root.StrassentrainerDatasetProvider) || null)));
     const validator = options.validator || (root && root.StrassentrainerCityDataValidator) || null;
     const packageApi = options.packageApi || (root && root.StrassentrainerCityPackage) || commonJsPackage;
     const updateApi = options.updateApi || (root && root.StrassentrainerCityUpdate) || commonJsUpdate;
@@ -1456,7 +1476,7 @@
       if (!cityId) {
         phase = STATES.ERROR;
         errorContext = "selection";
-        alertMessage = "Diese Gemeinde besitzt keine verwendbare OSM-Kennung.";
+        alertMessage = "Dieses Trainingsgebiet besitzt keine gültige Kennung.";
         render();
         return;
       }
@@ -1468,7 +1488,21 @@
       noticeMessage = "";
       render();
       try {
-        const installed = await storage.hasCity(cityId);
+        let installed = false;
+        const targetId = asText(municipality.cityId) || cityId;
+        if (targetId) {
+          installed = Boolean(await storage.hasCity(targetId));
+        }
+        if (!installed && municipality.id && municipality.id !== targetId) {
+          installed = Boolean(await storage.hasCity(municipality.id));
+        }
+        if (!installed && Array.isArray(installedCities)) {
+          installed = installedCities.some(c =>
+            (targetId && c.id === targetId) ||
+            (cityId && (c.id === cityId || c.package?.id === cityId)) ||
+            (municipality.id && (c.id === municipality.id || c.package?.id === municipality.id))
+          );
+        }
         if (operationId !== selectionOperationId || !modalOpen) return;
         selectedMunicipalityInstalled = Boolean(installed);
         phase = STATES.MUNICIPALITY_SELECTED;
@@ -1551,9 +1585,13 @@
       const retryingFailedDownload = phase === STATES.ERROR && errorContext === "download";
       if ((!retryingFailedDownload && phase !== STATES.MUNICIPALITY_SELECTED) || !selectedMunicipality) return;
       if (selectedMunicipalityInstalled) {
-        const cityId = municipalityCityId(selectedMunicipality);
-        const city = installedCities.find(candidate => candidate.id === cityId) || {
-          id: cityId,
+        const storageCityId = asText(selectedMunicipality.cityId);
+        const candidateId = asText(selectedMunicipality.id);
+        const city = installedCities.find(c =>
+          (storageCityId && c.id === storageCityId) ||
+          (candidateId && (c.id === candidateId || c.package?.id === candidateId))
+        ) || {
+          id: storageCityId || candidateId || municipalityCityId(selectedMunicipality),
           name: municipalityName(selectedMunicipality)
         };
         await activateInstalledCity(city, { fromModal: true });
@@ -1572,7 +1610,7 @@
         cancelDownload({ closing: true });
         phase = STATES.ERROR;
         errorContext = "download";
-        alertMessage = "Du bist momentan offline.\n\nFür das Herunterladen neuer Städte wird eine Internetverbindung benötigt. Bereits installierte Städte können weiterhin gespielt werden.";
+        alertMessage = "Für die Installation eines neuen Trainingsgebiets wird einmalig eine Internetverbindung benötigt.\n\nBereits installierte Städte können weiterhin gespielt werden.";
         render();
         announce(alertMessage);
         return;
@@ -1584,13 +1622,13 @@
       const controller = new AbortControllerClass();
       downloadController = controller;
       phase = STATES.DOWNLOADING;
-      progress = { stage: "preparing", message: "Gemeindedownload wird vorbereitet …", progress: 0 };
+      progress = { stage: "preparing", message: "Dataset wird geladen …", progress: 0 };
       alertMessage = "";
       noticeMessage = "";
       validatedPackage = null;
       warningDetailsExpanded = false;
       render();
-      announce(`${municipalityName(selectedMunicipality)} wird heruntergeladen.`);
+      announce(`${municipalityName(selectedMunicipality)} wird geladen.`);
 
       let validationStarted = false;
       try {
@@ -1614,10 +1652,55 @@
         phase = STATES.VALIDATING;
         validationStarted = true;
         render();
-        announce("Die heruntergeladenen Stadtdaten werden geprüft.");
+        announce("Datenpaket wird geprüft …");
 
+        if (!downloaded || typeof downloaded !== "object") {
+          const err = new Error("Das heruntergeladene Datenpaket ist ungültig.");
+          err.code = "PACKAGE_INVALID";
+          throw err;
+        }
+
+        // 1. Catalog ↔ Package contentHash check
+        const catalogHash = asText(selectedMunicipality?.contentHash).toLowerCase().replace(/^sha256:/, "");
+        const declaredHash = asText(downloaded?.package?.contentHash).toLowerCase().replace(/^sha256:/, "");
+        if (catalogHash && declaredHash && catalogHash !== declaredHash) {
+          const err = new Error(`Integritätsprüfung fehlgeschlagen: Katalog-Hash (${catalogHash}) stimmt nicht mit Paket-Hash (${declaredHash}) überein.`);
+          err.code = "CATALOG_HASH_MISMATCH";
+          throw err;
+        }
+
+        // 2. Cryptographic recomputation: verifyPackageHash
+        if (typeof validator.verifyPackageHash === "function" && downloaded?.package) {
+          const hashCheck = validator.verifyPackageHash(downloaded);
+          if (!hashCheck.valid) {
+            const err = new Error("Die berechnete Prüfsumme stimmt nicht mit dem Datenpaket überein.");
+            err.code = "PACKAGE_HASH_MISMATCH";
+            throw err;
+          }
+        }
+
+        // 3. Package contract validation: validateCityPackage
+        let packageValidation = null;
+        if (typeof validator.validateCityPackage === "function" && downloaded?.package) {
+          packageValidation = validator.validateCityPackage(downloaded);
+        }
+
+        // 4. City data validation: validateCityData
         const result = validator.validateCityData(downloaded, { sourceMode: "download" });
         if (operationId !== downloadOperationId || !modalOpen || controller.signal.aborted) return;
+        if (packageValidation && !packageValidation.valid && result) {
+          result.valid = false;
+          if (!result.validation) result.validation = { municipality: { errors: [] } };
+          if (packageValidation.validation?.municipality?.errors && result.validation?.municipality?.errors) {
+            result.validation.municipality.errors.push(...packageValidation.validation.municipality.errors);
+          }
+        }
+        if (downloaded.package && result) {
+          result.package = downloaded.package;
+          if (result.city && !result.city.package) {
+            result.city.package = downloaded.package;
+          }
+        }
         validatedPackage = result;
         phase = STATES.VALIDATION_RESULT;
         render();
