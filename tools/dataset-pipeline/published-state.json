@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "updatedAt": "2026-09-06T20:40:26.044Z",
+  "updatedAt": "2026-09-06T22:27:01.634Z",
   "datasets": {
     "de-oberasbach-fire-training": {
       "datasetId": "de-oberasbach-fire-training",
@@ -58,6 +58,15 @@
       "poiCount": 4453,
       "areaCount": 101,
       "filePath": "data/cities/de-nw-koeln.json"
+    },
+    "de-nw-kreis-olpe": {
+      "datasetId": "de-nw-kreis-olpe",
+      "version": "2026.09.07",
+      "contentHash": "sha256:1c076dc3988e06c6019b982a6521196b83830d2b7ab0b110f438aa1352be7455",
+      "packageType": "osm",
+      "protected": false,
+      "publishedAt": "2026-09-06T22:27:01.634Z",
+      "filePath": "data/cities/de-nw-kreis-olpe.json"
     }
   }
 }

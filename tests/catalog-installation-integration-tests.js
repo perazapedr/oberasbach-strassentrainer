@@ -306,14 +306,20 @@ async function waitForState(manager, targetPhases, maxMs = 3000) {
 
     const stateAfterSearch = manager.getState();
     assert.equal(stateAfterSearch.phase, "search-results");
-    assert.equal(stateAfterSearch.searchResults.length, 1);
-    const olpeCandidate = stateAfterSearch.searchResults[0];
+    assert.equal(stateAfterSearch.searchResults.length, 2);
+    const olpeCandidate = stateAfterSearch.searchResults.find(result => result.id === "de-nw-olpe");
+    const districtCandidate = stateAfterSearch.searchResults.find(result => result.id === "de-nw-kreis-olpe");
+    assert.ok(olpeCandidate);
+    assert.ok(districtCandidate);
     assert.equal(olpeCandidate.id, "de-nw-olpe");
     assert.equal(olpeCandidate.name, "Olpe");
     assert.equal(olpeCandidate.state, "Nordrhein-Westfalen");
     assert.equal(olpeCandidate.streetCount, 461);
     assert.equal(olpeCandidate.poiCount, 114);
     assert.equal(olpeCandidate.areaCount, 2);
+    assert.equal(districtCandidate.name, "Kreis Olpe");
+    assert.equal(districtCandidate.datasetKind, "district");
+    assert.equal(districtCandidate.areaCount, 7);
 
     // Suche "Oberasbach"
     documentRef.getElementById("citySearchInput").value = "Oberasbach";
@@ -339,8 +345,12 @@ async function waitForState(manager, targetPhases, maxMs = 3000) {
 
     // Olpe-Button in den Suchergebnissen klicken
     const resultsContainer = documentRef.getElementById("citySearchResults");
-    assert.equal(resultsContainer.children.length, 1);
-    resultsContainer.children[0].click();
+    assert.equal(resultsContainer.children.length, 2);
+    const municipalityButton = resultsContainer.children.find(
+      button => button.dataset.cityId === "de-nw-olpe"
+    );
+    assert.ok(municipalityButton, "Die Gemeinde Olpe ist trotz gleichnamigem Landkreis eindeutig auswählbar");
+    municipalityButton.click();
     await waitForState(manager, "municipality-selected");
 
     assert.equal(manager.getState().phase, "municipality-selected");
@@ -447,7 +457,7 @@ async function waitForState(manager, targetPhases, maxMs = 3000) {
     documentRef.getElementById("citySearchForm").dispatch("submit");
     await waitForState(manager, "search-results");
 
-    resultsContainer.children[0].click();
+    resultsContainer.children.find(button => button.dataset.cityId === "de-nw-olpe").click();
     await waitForState(manager, "municipality-selected");
 
     assert.equal(manager.getState().phase, "municipality-selected");

@@ -326,8 +326,6 @@
         }
         seenIds.add(id);
 
-        if (item.downloadPath) {
-          assertSafeRelativePath(item.downloadPath, providerId);
         const pathCandidate = item.downloadPath || item.packageUrl;
         if (pathCandidate) {
           assertSafeRelativePath(pathCandidate, providerId);
@@ -489,7 +487,6 @@
       const metadata = await getDatasetMetadata(datasetId, downloadOptions);
       throwIfAborted(downloadOptions.signal);
 
-      const downloadPath = assertSafeRelativePath(metadata.downloadPath, providerId);
       const downloadPath = assertSafeRelativePath(metadata.downloadPath || metadata.packageUrl, providerId);
 
       if (typeof downloadOptions.onProgress === "function") {

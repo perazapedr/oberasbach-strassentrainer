@@ -29,11 +29,13 @@ function trimmedString(value) {
 
 function decodeOpl(value) {
   const text = String(value || "");
-  try {
-    return decodeURIComponent(text);
-  } catch (_) {
-    return text.replace(/%([0-9A-Fa-f]{2})/g, (_, hex) => String.fromCharCode(parseInt(hex, 16)));
-  }
+  // Osmium OPL escapes a Unicode code point as %hex% (including the
+  // trailing percent sign), rather than using URL percent encoding.
+  return text.replace(/%([0-9A-Fa-f]{2,6})%/g, (encoded, hex) => {
+    const codePoint = Number.parseInt(hex, 16);
+    if (codePoint > 0x10ffff || (codePoint >= 0xd800 && codePoint <= 0xdfff)) return encoded;
+    return String.fromCodePoint(codePoint);
+  });
 }
 
 function parseOplTags(raw) {
@@ -94,6 +96,34 @@ function selectMunicipalityRelation(candidates, municipality, relationId = null,
       return `${candidate.id} (${ags})`;
     }).join(", ");
     throw new Error(`Municipality boundary is ambiguous: ${details}. Use --relation-id.`);
+  }
+  return matching[0];
+}
+
+function selectTargetRelation(candidates, targetName, relationId = null, adminLevel = 8, targetType = "municipality") {
+  if (targetType !== "district") {
+    return selectMunicipalityRelation(candidates, targetName, relationId, adminLevel);
+  }
+  const expectedId = relationId === null || relationId === undefined ? null : Number(relationId);
+  const expectedLevel = Number(adminLevel);
+  const administrative = (Array.isArray(candidates) ? candidates : []).filter(candidate => (
+    candidate && Number.isSafeInteger(candidate.id) && candidate.id > 0
+    && candidate.tags && candidate.tags.boundary === "administrative"
+  ));
+  if (expectedId !== null) {
+    const selected = administrative.filter(candidate => candidate.id === expectedId && Number(candidate.tags.admin_level) === expectedLevel);
+    if (selected.length !== 1) {
+      throw new Error(`Administrative district relation ${expectedId} with admin_level=${expectedLevel} was not found in the PBF.`);
+    }
+    return selected[0];
+  }
+  const expectedName = normalizeText(targetName);
+  const matching = administrative.filter(candidate => (
+    normalizeText(candidate.tags.name || candidate.tags["name:de"]) === expectedName
+    && Number(candidate.tags.admin_level) === expectedLevel
+  ));
+  if (matching.length !== 1) {
+    throw new Error(`Expected one admin_level=${expectedLevel} district boundary named "${targetName}", found ${matching.length}.`);
   }
   return matching[0];
 }
@@ -239,6 +269,10 @@ function clipLineStringToBoundary(coordinates, boundary) {
     pieces = next;
   }
   return pieces.filter(piece => {
+    // Turf can emit two-point floating-point slivers at polygon intersections
+    // whose endpoints differ only at machine precision. They are not usable
+    // street geometry and can otherwise become false boundary targets.
+    if (turf.length(piece, { units: "kilometers" }) <= 0.000001) return false;
     const midpoint = lineMidpointFeature(piece);
     return midpoint && turf.booleanPointInPolygon(midpoint, polygon, { ignoreBoundary: false });
   }).map(piece => piece.geometry.coordinates.map(normalizeCoordinate))
@@ -537,6 +571,99 @@ function buildAreas(areaObjects, municipality, boundary) {
   return osmService.discoverTrainingAreas({ elements, municipalityInfo: municipality, boundary, options: {} });
 }
 
+function buildDistrictMunicipalityAreas(areaObjects, district, boundary) {
+  const municipalityObjects = new Map([...areaObjects.entries()].filter(([, candidate]) => (
+    candidate.identity.type === "relation"
+    && candidate.tags.boundary === "administrative"
+    && Number(candidate.tags.admin_level) === 8
+  )));
+  const areas = buildAreas(municipalityObjects, district, boundary);
+  const sourceById = new Map([...municipalityObjects.values()].map(candidate => [
+    `osm-${candidate.identity.type}-${candidate.identity.id}`,
+    candidate
+  ]));
+  return areas.map(area => {
+    const source = sourceById.get(area.id);
+    return {
+      ...area,
+      parentId: district.id,
+      areaType: "municipality",
+      official: true,
+      osmType: source ? source.identity.type : "relation",
+      osmId: source ? source.identity.id : Number(String(area.id).replace(/^osm-relation-/, "")),
+      officialMunicipalityKey: trimmedString(source && source.tags["de:amtlicher_gemeindeschluessel"]) || null,
+      regionalKey: trimmedString(source && source.tags["de:regionalschluessel"]) || null
+    };
+  }).sort((a, b) => compareNames(a.name, b.name) || a.id.localeCompare(b.id));
+}
+
+function buildDistrictStreets(streetWays, cityId, municipalityAreas, diagnostics = {}) {
+  const areas = [...municipalityAreas].sort((a, b) => a.id.localeCompare(b.id));
+  const grouped = new Map();
+  const wayMunicipalities = new Map();
+  for (const way of [...streetWays.values()].sort((a, b) => a.id - b.id)) {
+    for (const area of areas) {
+      const municipalityLines = way.lines.flatMap(line => clipLineStringToBoundary(line, area.polygon));
+      if (!municipalityLines.length) continue;
+      const normalizedName = geometryApi.normalizeStreetName(way.name);
+      const key = `${area.id}\u0000${normalizedName}`;
+      if (!grouped.has(key)) grouped.set(key, { area, names: [], ways: [] });
+      grouped.get(key).names.push(way.name);
+      grouped.get(key).ways.push({ ...way, lines: municipalityLines });
+      if (!wayMunicipalities.has(way.id)) wayMunicipalities.set(way.id, new Set());
+      wayMunicipalities.get(way.id).add(area.id);
+    }
+  }
+
+  const streets = [...grouped.values()].map(group => {
+    const names = [...new Set(group.names)].sort(compareNames);
+    const name = names[0];
+    const ways = group.ways.sort((a, b) => a.id - b.id);
+    return {
+      id: `${cityId}:${group.area.id}:${geometryApi.createStreetId(name)}`,
+      cityId,
+      municipalityId: group.area.id,
+      municipalityName: group.area.name,
+      name,
+      displayName: name,
+      aliases: [...new Set([...names.slice(1), ...ways.flatMap(way => parseAlternativeNames(way.tags, name))])].sort(compareNames),
+      areaIds: [group.area.id],
+      geometry: { type: "MultiLineString", coordinates: ways.flatMap(way => way.lines) },
+      osmWayIds: [...new Set(ways.map(way => way.id))].sort((a, b) => a - b),
+      geometrySource: "openstreetmap-pbf"
+    };
+  }).sort((a, b) => a.id.localeCompare(b.id, "de", { numeric: true }));
+
+  const municipalitiesByName = new Map();
+  for (const street of streets) {
+    const normalizedName = geometryApi.normalizeStreetName(street.name);
+    if (!municipalitiesByName.has(normalizedName)) municipalitiesByName.set(normalizedName, new Set());
+    municipalitiesByName.get(normalizedName).add(street.municipalityId);
+  }
+  const duplicates = [];
+  for (const street of streets) {
+    const normalizedName = geometryApi.normalizeStreetName(street.name);
+    if (municipalitiesByName.get(normalizedName).size > 1) {
+      street.displayName = `${street.name} · ${street.municipalityName}`;
+      duplicates.push({
+        normalizedName,
+        municipality: street.municipalityName,
+        municipalityId: street.municipalityId,
+        streetId: street.id,
+        osmWayIds: [...street.osmWayIds]
+      });
+    }
+  }
+  diagnostics.crossMunicipalityWayCount = [...wayMunicipalities.values()].filter(ids => ids.size > 1).length;
+  const crossWays = new Set([...wayMunicipalities.entries()].filter(([, ids]) => ids.size > 1).map(([id]) => id));
+  diagnostics.boundaryStreetCount = streets.filter(street => street.osmWayIds.some(id => crossWays.has(id))).length;
+  diagnostics.unassignedStreetWayCount = [...streetWays.keys()].filter(id => !wayMunicipalities.has(id)).length;
+  diagnostics.duplicateStreetNamesAcrossMunicipalities = duplicates.sort((a, b) => (
+    compareNames(a.normalizedName, b.normalizedName) || compareNames(a.municipality, b.municipality)
+  ));
+  return streets;
+}
+
 function categoriesForPackage() {
   return poiCategories.getAll().map(category => ({
     id: category.id,
@@ -559,12 +686,13 @@ function assemblePackage(options) {
     relation, boundary, featureCollections, municipalityName, state = "Nordrhein-Westfalen",
     country = "Deutschland", pbfTimestamp, sourcePbf
   } = options;
+  const targetType = options && options.targetType === "district" ? "district" : "municipality";
   const cityId = `osm-relation-${relation.id}`;
   const bounds = geometryBounds(boundary);
   const cityBase = {
     id: cityId,
-    name: trimmedString(relation.tags.name) || municipalityName,
-    displayName: trimmedString(relation.tags.name) || municipalityName,
+    name: targetType === "district" ? municipalityName : (trimmedString(relation.tags.name) || municipalityName),
+    displayName: targetType === "district" ? municipalityName : (trimmedString(relation.tags.name) || municipalityName),
     district: trimmedString(relation.tags["is_in:county"]) || null,
     state,
     country,
@@ -576,7 +704,8 @@ function assemblePackage(options) {
     regionalKey: trimmedString(relation.tags["de:regionalschluessel"]) || null,
     bounds,
     center: municipalityCenter(boundary),
-    defaultZoom: 12,
+    defaultZoom: targetType === "district" ? 10 : 12,
+    datasetKind: targetType,
     source: "osm-pbf",
     dataVersion: 1,
     createdAt: pbfTimestamp,
@@ -584,9 +713,19 @@ function assemblePackage(options) {
   };
   const diagnostics = {};
   const collected = collectRelevantFeatures(featureCollections, boundary, diagnostics, { ...cityBase, osmId: relation.id });
-  const streets = buildStreets(collected.streetWays, cityId);
+  const districtAreas = targetType === "district"
+    ? buildDistrictMunicipalityAreas(collected.areaObjects, { ...cityBase, osmId: relation.id }, boundary)
+    : null;
+  if (targetType === "district" && districtAreas.length < 2) {
+    throw new Error(`District municipality discovery found only ${districtAreas.length} contained municipalities.`);
+  }
+  const streets = targetType === "district"
+    ? buildDistrictStreets(collected.streetWays, cityId, districtAreas, diagnostics)
+    : buildStreets(collected.streetWays, cityId);
   const pois = buildPois(collected.poiObjects, cityId, diagnostics);
-  const areas = buildAreas(collected.areaObjects, { ...cityBase, osmId: relation.id }, boundary);
+  const areas = targetType === "district"
+    ? districtAreas
+    : buildAreas(collected.areaObjects, { ...cityBase, osmId: relation.id }, boundary);
   const rawDataset = { city: cityBase, boundary, streets, pois, areas };
   const normalized = validator.validateCityData(rawDataset, { sourceMode: "download", diagnostics: {} });
   if (!normalized.valid) {
@@ -599,11 +738,39 @@ function assemblePackage(options) {
     hasAreas: normalized.areas.length > 0,
     areaCount: normalized.areas.length
   };
+  if (targetType === "district") {
+    const areaById = new Map(normalized.areas.map(area => [area.id, area]));
+    for (const street of normalized.streets) {
+      const membership = areaById.get(street.municipalityId);
+      if (!membership || !street.areaIds.includes(street.municipalityId)) {
+        throw new Error(`District street ${street.id} lost its municipality membership.`);
+      }
+    }
+    for (const poi of normalized.pois) {
+      const municipalityIds = poi.areaIds.filter(id => areaById.get(id)?.areaType === "municipality").sort();
+      if (!municipalityIds.length) throw new Error(`District POI ${poi.id} has no municipality membership.`);
+      poi.municipalityId = municipalityIds[0];
+      poi.municipalityName = areaById.get(municipalityIds[0]).name;
+    }
+    diagnostics.municipalityCount = normalized.areas.length;
+    diagnostics.municipalities = normalized.areas.map(area => ({
+      name: area.name,
+      areaId: area.id,
+      relationId: area.osmId,
+      adminLevel: area.adminLevel,
+      officialMunicipalityKey: area.officialMunicipalityKey,
+      geometryType: (area.polygon || area.geometry)?.type || null,
+      contained: true,
+      parentId: area.parentId,
+      streetCount: normalized.streets.filter(street => street.areaIds.includes(area.id)).length,
+      poiCount: normalized.pois.filter(poi => poi.areaIds.includes(area.id)).length
+    })).sort((a, b) => compareNames(a.name, b.name));
+  }
   const datasetVersion = (options && options.version) || formatDatasetVersion(pbfTimestamp);
   const packageMeta = {
     id: (options && options.datasetId) || (options && options.packageId) || `osm-relation-${relation.id}`,
     type: "osm",
-    datasetKind: (options && options.datasetKind) || "municipality",
+    datasetKind: targetType,
     version: datasetVersion,
     title: `${city.displayName} – OpenStreetMap-PBF-Dataset`,
     createdAt: pbfTimestamp,
@@ -627,8 +794,11 @@ function assemblePackage(options) {
       osmDataTimestamp: pbfTimestamp,
       builderVersion: BUILDER_VERSION,
       generatedAt: pbfTimestamp,
-      municipalityRelation: relation.id,
-      municipalityKey: city.officialMunicipalityKey
+      municipalityRelation: targetType === "municipality" ? relation.id : null,
+      municipalityKey: targetType === "municipality" ? city.officialMunicipalityKey : null,
+      districtRelation: targetType === "district" ? relation.id : null,
+      districtKey: targetType === "district" ? city.officialMunicipalityKey : null,
+      rawRelationName: trimmedString(relation.tags.name) || null
     },
     build: {
       warnings: (allValidationIssues(normalized, "warnings") || []).map(warning => ({
@@ -668,6 +838,7 @@ module.exports = {
   parseOplTags,
   parseBoundaryRelationOpl,
   selectMunicipalityRelation,
+  selectTargetRelation,
   normalizeAreaGeometry,
   canonicalizeAreaGeometry,
   formatDatasetVersion,
@@ -679,5 +850,7 @@ module.exports = {
   buildPois,
   areaFeatureToOsmElement,
   buildAreas,
+  buildDistrictMunicipalityAreas,
+  buildDistrictStreets,
   assemblePackage
 };

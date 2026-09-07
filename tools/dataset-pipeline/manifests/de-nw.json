@@ -4,6 +4,15 @@
   "description": "Nordrhein-Westfalen kommunale Trainingspakete",
   "datasets": [
     {
+      "datasetId": "de-nw-kreis-olpe",
+      "name": "Kreis Olpe",
+      "relationId": 1891506,
+      "adminLevel": 6,
+      "targetType": "district",
+      "version": "2026.09.07",
+      "enabled": true
+    },
+    {
       "datasetId": "de-nw-olpe",
       "name": "Olpe",
       "relationId": 163179,
@@ -33,4 +42,3 @@
     }
   ]
 }
-

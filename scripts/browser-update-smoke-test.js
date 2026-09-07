@@ -3,13 +3,45 @@
 const http = require("node:http");
 const fs = require("node:fs");
 const path = require("node:path");
+const os = require("node:os");
 const { spawn } = require("node:child_process");
+const { publishRepository } = require("../tools/dataset-publisher/index.js");
 
 const ROOT = path.resolve(__dirname, "..");
 const FIXTURES_DIR = path.join(ROOT, "tests", "fixtures", "update");
 const CHROME_PATH = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
 const DEBUG_PORT = 9334;
 const USER_DATA_DIR = `/tmp/chrome-smoke-phase-15-6-${Date.now()}`;
+
+async function buildImmutableUpdateRepository() {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "strassentrainer-update-repository-"));
+  const sourceDir = path.join(tempRoot, "source");
+  const repositoryDir = path.join(tempRoot, "repository");
+  fs.mkdirSync(sourceDir, { recursive: true });
+
+  const sourcePackagePath = path.join(sourceDir, "olpe.json");
+  fs.copyFileSync(path.join(FIXTURES_DIR, "olpe-v1.json"), sourcePackagePath);
+  await publishRepository({ sourceDir, outputDir: repositoryDir, precompress: false });
+  const catalogV1 = fs.readFileSync(path.join(repositoryDir, "catalog.json"));
+
+  fs.copyFileSync(path.join(FIXTURES_DIR, "olpe-v2.json"), sourcePackagePath);
+  await publishRepository({ sourceDir, outputDir: repositoryDir, precompress: false });
+  const catalogV2 = fs.readFileSync(path.join(repositoryDir, "catalog.json"));
+
+  const parsedV1 = JSON.parse(catalogV1.toString("utf8"));
+  const parsedV2 = JSON.parse(catalogV2.toString("utf8"));
+  const entryV1 = parsedV1.datasets[0];
+  const entryV2 = parsedV2.datasets[0];
+  if (!entryV1 || !entryV2 || entryV1.downloadPath === entryV2.downloadPath) {
+    throw new Error("Publisher erzeugte keine unterschiedlichen immutable V1/V2-Pfade.");
+  }
+  if (!fs.existsSync(path.join(repositoryDir, entryV1.downloadPath))
+    || !fs.existsSync(path.join(repositoryDir, entryV2.downloadPath))) {
+    throw new Error("Publisher hat den alten oder neuen immutable Package-Stand nicht erhalten.");
+  }
+
+  return { tempRoot, repositoryDir, catalogV1, catalogV2, entryV1, entryV2 };
+}
 
 // MIME types for static server
 const MIME_TYPES = {
@@ -31,34 +63,32 @@ function startDynamicServer(serverState) {
 
         // Dynamic routing for update testing
         if (pathname === "/data/catalog.json") {
-          const catalogPath = serverState.catalogVersion === "v2"
-            ? path.join(FIXTURES_DIR, "catalog-v2.json")
-            : path.join(FIXTURES_DIR, "catalog-v1.json");
+          const catalogBytes = serverState.catalogVersion === "v2"
+            ? serverState.repository.catalogV2
+            : serverState.repository.catalogV1;
           res.writeHead(200, {
             "Content-Type": "application/json; charset=utf-8",
             "Cache-Control": "no-cache"
           });
-          fs.createReadStream(catalogPath).pipe(res);
+          res.end(catalogBytes);
           return;
         }
 
-        if (pathname === "/data/cities/de-nw-olpe.json") {
-          const olpeV1Path = path.join(FIXTURES_DIR, "olpe-v1.json");
+        if (pathname.startsWith("/data/datasets/")) {
+          const relativePath = pathname.slice("/data/".length);
+          const artifactPath = path.resolve(serverState.repository.repositoryDir, relativePath);
+          const relativeToRepository = path.relative(serverState.repository.repositoryDir, artifactPath);
+          if (relativeToRepository.startsWith("..") || path.isAbsolute(relativeToRepository)
+            || !fs.existsSync(artifactPath) || !fs.statSync(artifactPath).isFile()) {
+            res.writeHead(404, { "Content-Type": "text/plain" });
+            res.end("Not Found");
+            return;
+          }
           res.writeHead(200, {
             "Content-Type": "application/json; charset=utf-8",
-            "Cache-Control": "no-cache"
+            "Cache-Control": "public, max-age=31536000, immutable"
           });
-          fs.createReadStream(olpeV1Path).pipe(res);
-          return;
-        }
-
-        if (pathname === "/data/cities/de-nw-olpe-v2.json") {
-          const olpeV2Path = path.join(FIXTURES_DIR, "olpe-v2.json");
-          res.writeHead(200, {
-            "Content-Type": "application/json; charset=utf-8",
-            "Cache-Control": "no-cache"
-          });
-          fs.createReadStream(olpeV2Path).pipe(res);
+          fs.createReadStream(artifactPath).pipe(res);
           return;
         }
 
@@ -183,7 +213,10 @@ class CdpClient {
 async function runUpdateSmokeTest() {
   console.log("=== Starte Phase 15.6 Browser Update Smoke Test mit Headless Chrome ===");
 
-  const serverState = { catalogVersion: "v1" };
+  const repository = await buildImmutableUpdateRepository();
+  const serverState = { catalogVersion: "v1", repository };
+  console.log(`Immutable V1 URL: ${repository.entryV1.downloadPath}`);
+  console.log(`Immutable V2 URL: ${repository.entryV2.downloadPath}`);
   const { server, port } = await startDynamicServer(serverState);
   console.log(`Lokaler HTTP-Server läuft auf Port ${port}`);
 
@@ -247,9 +280,9 @@ async function runUpdateSmokeTest() {
         catalogRequests++;
         console.log(`[NETZWERK] Katalog abgerufen: ${url}`);
       }
-      if (url.includes("data/cities/")) {
+      if (url.includes("/data/datasets/") && url.endsWith("/package.json")) {
         packageRequests++;
-        console.log(`[NETZWERK] Stadtpaket abgerufen: ${url}`);
+        console.log(`[NETZWERK] Immutable Stadtpaket abgerufen: ${url}`);
       }
     });
 
@@ -320,6 +353,53 @@ async function runUpdateSmokeTest() {
 
     const activeCityV1 = await cdp.eval(`document.getElementById("activeCityName").textContent.trim()`);
     console.log(`✓ Olpe V1 aktiv: "${activeCityV1}"`);
+
+    // Reale Statistik vor dem Update erzeugen: echte Runde + nativer CDP-Klick.
+    const v1Round = await cdp.eval(`(async () => {
+      document.getElementById("mainButton").click();
+      const deadline = performance.now() + 5000;
+      while (performance.now() < deadline) {
+        const state = window.STRASSENTRAINER_DEBUG.getGameState();
+        if (state.status === "active" && state.currentRound && state.currentRound.target) {
+          const mapElement = document.getElementById("map");
+          mapElement.scrollIntoView({ block: "center", inline: "center" });
+          await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+          const rect = mapElement.getBoundingClientRect();
+          return {
+            question: document.getElementById("targetStreet").textContent.trim(),
+            target: state.currentRound.target,
+            x: rect.left + rect.width / 2,
+            y: rect.top + rect.height / 2
+          };
+        }
+        await new Promise(resolve => setTimeout(resolve, 25));
+      }
+      throw new Error("V1-Runde wurde nicht aktiv");
+    })()`);
+    if (!v1Round.question || !v1Round.target || !v1Round.target.geometry) {
+      throw new Error(`V1-Runde ohne echte Frage/Geometrie: ${JSON.stringify(v1Round)}`);
+    }
+    await cdp.send("Input.dispatchMouseEvent", { type: "mousePressed", x: v1Round.x, y: v1Round.y, button: "left", clickCount: 1 });
+    await cdp.send("Input.dispatchMouseEvent", { type: "mouseReleased", x: v1Round.x, y: v1Round.y, button: "left", clickCount: 1 });
+    const v1Result = await cdp.eval(`(async () => {
+      const deadline = performance.now() + 5000;
+      while (performance.now() < deadline) {
+        const state = window.STRASSENTRAINER_DEBUG.getGameState();
+        if (state.status === "answered" && state.currentRound && state.currentRound.result) {
+          return {
+            distanceMeters: state.currentRound.result.distanceMeters,
+            points: state.currentRound.result.points,
+            roundsEvaluated: window.STRASSENTRAINER_DEBUG.getStatistics().overall.roundsEvaluated
+          };
+        }
+        await new Promise(resolve => setTimeout(resolve, 25));
+      }
+      throw new Error("Nativer V1-Kartenklick wurde nicht ausgewertet");
+    })()`);
+    if (!Number.isFinite(v1Result.distanceMeters) || !Number.isFinite(v1Result.points) || v1Result.roundsEvaluated < 1) {
+      throw new Error(`V1-Statistik unvollständig: ${JSON.stringify(v1Result)}`);
+    }
+    console.log(`✓ Reale V1-Statistik erzeugt: ${v1Round.question}, ${v1Result.distanceMeters.toFixed(1)} m, ${v1Result.points} Punkte`);
 
     // -----------------------------------------------------------------------
     // Schritt 2: Auf Katalog V2 umschalten
@@ -400,6 +480,30 @@ async function runUpdateSmokeTest() {
       throw new Error(`Olpe muss aktiv bleiben, gefunden: "${activeCityAfterUpdate}"`);
     }
 
+    const persistedUpdate = await cdp.eval(`(async () => {
+      const storage = window.StrassentrainerCityStorage;
+      const city = await storage.getCity("osm-relation-163179");
+      const streets = await storage.getCityStreets("osm-relation-163179");
+      const pois = await storage.getCityPois("osm-relation-163179");
+      return {
+        version: city && city.package && city.package.version,
+        contentHash: city && city.package && city.package.contentHash,
+        hasNewStreet: streets.some(street => street.name === "Neue Teststraße"),
+        hasRemovedStreet: streets.some(street => street.name === "Zur Wolfsschlade"),
+        hasNewPoi: pois.some(poi => poi.name === "Neue Test-Feuerwache"),
+        hasRemovedPoi: pois.some(poi => poi.name === "Polizei"),
+        roundsEvaluated: window.STRASSENTRAINER_DEBUG.getStatistics().overall.roundsEvaluated
+      };
+    })()`);
+    if (persistedUpdate.version !== "2026.09.06"
+      || persistedUpdate.contentHash !== "sha256:c2b7ba6baf4eb3d42832bef02ab795fabdd327c347e8e3515df0bba9368e871a"
+      || !persistedUpdate.hasNewStreet || persistedUpdate.hasRemovedStreet
+      || !persistedUpdate.hasNewPoi || persistedUpdate.hasRemovedPoi
+      || persistedUpdate.roundsEvaluated !== v1Result.roundsEvaluated) {
+      throw new Error(`V2-Persistenz/Statistikerhalt fehlgeschlagen: ${JSON.stringify(persistedUpdate)}`);
+    }
+    console.log(`✓ V2 in IndexedDB verifiziert; Hash gespeichert; V1-Statistik (${persistedUpdate.roundsEvaluated} Runde) erhalten`);
+
     // -----------------------------------------------------------------------
     // Schritt 7: Freie Runde starten
     // -----------------------------------------------------------------------
@@ -465,6 +569,11 @@ async function runUpdateSmokeTest() {
     if (packageRequests < 2) {
       throw new Error(`FEHLER: Zu wenige Paket-Anfragen (${packageRequests})! Erwartet >= 2 (V1 und V2)`);
     }
+    const requestedV1 = capturedRequests.some(url => url.endsWith(`/data/${repository.entryV1.downloadPath}`));
+    const requestedV2 = capturedRequests.some(url => url.endsWith(`/data/${repository.entryV2.downloadPath}`));
+    if (!requestedV1 || !requestedV2) {
+      throw new Error("V1 und V2 müssen über verschiedene Package-URLs geladen worden sein.");
+    }
 
     console.log("===============================================================");
     console.log("✓ BROWSER UPDATE SMOKE TEST ERFOLGREICH BESTANDEN!");
@@ -479,6 +588,9 @@ async function runUpdateSmokeTest() {
     server.close();
     try {
       fs.rmSync(USER_DATA_DIR, { recursive: true, force: true });
+    } catch (_) {}
+    try {
+      fs.rmSync(repository.tempRoot, { recursive: true, force: true });
     } catch (_) {}
   }
 }

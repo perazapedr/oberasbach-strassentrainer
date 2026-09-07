@@ -90,11 +90,11 @@ function allIssues(result, kind = "errors") {
 const tests = [];
 function test(name, fn) { tests.push({ name, fn }); }
 
-test("Katalog enthält exakt die 5 Referenzstädte mit eindeutigen IDs und Hashes", () => {
+test("Katalog enthält die 5 Municipality-Referenzstädte mit eindeutigen IDs und Hashes", () => {
   const rawCatalog = fs.readFileSync(CATALOG_PATH, "utf8");
   const catalog = JSON.parse(rawCatalog);
   assert.equal(catalog.schemaVersion, 1);
-  assert.equal(catalog.datasets.length, 5);
+  assert.ok(catalog.datasets.length >= EXPECTED_CITIES.length);
 
   const seenDatasetIds = new Set();
   const seenCityIds = new Set();

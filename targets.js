@@ -36,6 +36,11 @@
       return {
         ...street,
         cityId: rawStreet.cityId || null,
+        // Keep the canonical package name separate from a district-wide
+        // disambiguated displayName (for example "Hauptstraße · Olpe").
+        // TrainingArea filtering can then choose the shortest unambiguous
+        // label without changing street identity or the package payload.
+        canonicalName: String(rawStreet.name || street.displayName || "").trim(),
         targetType: TARGET_TYPES.STREET,
         category: "street",
         categoryLabel: "Straße",

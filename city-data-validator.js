@@ -1094,12 +1094,14 @@
     const streets = Array.isArray(data?.streets) ? data.streets : [];
     const pois = Array.isArray(data?.pois) ? data.pois : [];
     const areas = Array.isArray(data?.areas) ? data.areas : [];
+    const districtDataset = trimmedString(pkg.datasetKind) === "district";
 
     return {
       package: {
         id: String(pkg.id || "").trim(),
         type: String(pkg.type || "").trim(),
-        version: String(pkg.version || "").trim()
+        version: String(pkg.version || "").trim(),
+        ...(districtDataset ? { datasetKind: "district" } : {})
       },
       city: {
         id: String(city.id || "").trim(),
@@ -1131,7 +1133,13 @@
         geometry: street.geometry ? {
           type: street.geometry.type,
           coordinates: street.geometry.coordinates
-        } : null
+        } : null,
+        ...(districtDataset ? {
+          displayName: String(street.displayName || street.name || "").trim(),
+          municipalityId: String(street.municipalityId || "").trim(),
+          municipalityName: String(street.municipalityName || "").trim(),
+          areaIds: Array.isArray(street.areaIds) ? [...new Set(street.areaIds.map(String))].sort() : []
+        } : {})
       })).sort((a, b) => a.id.localeCompare(b.id, "de", { numeric: true })),
       pois: pois.map(poi => ({
         id: String(poi.id || "").trim(),
@@ -1145,7 +1153,12 @@
         geometry: poi.geometry ? {
           type: poi.geometry.type,
           coordinates: poi.geometry.coordinates
-        } : null
+        } : null,
+        ...(districtDataset ? {
+          municipalityId: String(poi.municipalityId || "").trim(),
+          municipalityName: String(poi.municipalityName || "").trim(),
+          areaIds: Array.isArray(poi.areaIds) ? [...new Set(poi.areaIds.map(String))].sort() : []
+        } : {})
       })).sort((a, b) => a.id.localeCompare(b.id, "de", { numeric: true })),
       areas: areas.map(area => ({
         id: String(area.id || "").trim(),
@@ -1166,7 +1179,14 @@
         } : (area.boundary ? {
           type: area.boundary.type,
           coordinates: area.boundary.coordinates
-        } : null)
+        } : null),
+        ...(districtDataset ? {
+          areaType: String(area.areaType || "").trim(),
+          official: Boolean(area.official),
+          osmType: String(area.osmType || "").trim(),
+          osmId: Number(area.osmId) || 0,
+          officialMunicipalityKey: String(area.officialMunicipalityKey || "").trim()
+        } : {})
       })).sort((a, b) => a.id.localeCompare(b.id, "de", { numeric: true }))
     };
   }
@@ -1760,15 +1780,17 @@
     const groups = new Map();
     for (const street of structurallyValid.sort(compareIds)) {
       const comparisonName = normalizeStreetComparisonName(street.name);
-      if (!groups.has(comparisonName)) groups.set(comparisonName, []);
-      groups.get(comparisonName).push(street);
+      const municipalityScope = trimmedString(street.municipalityId);
+      const groupKey = `${municipalityScope}\u0000${comparisonName}`;
+      if (!groups.has(groupKey)) groups.set(groupKey, { comparisonName, streets: [] });
+      groups.get(groupKey).streets.push(street);
     }
     profiler.end("streetGroupingMs", startedAt);
 
     const output = [];
     const threshold = options.streetMergeDistanceMeters;
-    for (const comparisonName of [...groups.keys()].sort(compareText)) {
-      const group = groups.get(comparisonName);
+    for (const groupKey of [...groups.keys()].sort(compareText)) {
+      const { comparisonName, streets: group } = groups.get(groupKey);
       startedAt = profiler.start();
       const components = connectedStreetComponents(group, threshold, profiler);
       profiler.end("streetDuplicateDetectionMs", startedAt);

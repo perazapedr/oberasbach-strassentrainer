@@ -32,10 +32,14 @@ test("1.1 Manifest lädt und validiert das Standard-NRW-Manifest erfolgreich", (
   const manifest = loadManifest(DEFAULT_MANIFEST);
   assert.equal(manifest.schemaVersion, 1);
   assert.equal(manifest.regionId, "de-nw");
-  assert.equal(manifest.datasets.length, 4);
+  assert.equal(manifest.datasets.length, 5);
 
   const targets = filterTargets(manifest, { all: true });
-  assert.equal(targets.length, 4);
+  assert.equal(targets.length, 5);
+  assert.deepEqual(
+    targets.find(t => t.datasetId === "de-nw-kreis-olpe"),
+    { datasetId: "de-nw-kreis-olpe", name: "Kreis Olpe", relationId: 1891506, adminLevel: 6, targetType: "district", version: "2026.09.07", enabled: true }
+  );
   assert.ok(targets.some(t => t.datasetId === "de-nw-olpe"));
   assert.ok(targets.some(t => t.datasetId === "de-nw-wenden"));
   assert.ok(targets.some(t => t.datasetId === "de-nw-siegen"));
@@ -502,5 +506,3 @@ test("4.11 Catalog Determinismus: UNCHANGED Datensätze verändern catalog.json 
     fs.rmSync(tempTargetDir, { recursive: true, force: true });
   }
 });
-
-

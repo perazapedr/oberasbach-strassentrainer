@@ -39,14 +39,18 @@ test("1.1 Publisher erzeugt vollständiges statisches Repository-Layout mit mani
 
     // Prüfe Oberasbach an erster Position
     const oberasbachEntry = catalog.datasets[0];
-    assert.ok(oberasbachEntry.id === "oberasbach" || oberasbachEntry.id === "de-oberasbach-fire-training");
+    assert.equal(oberasbachEntry.id, "de-oberasbach-fire-training");
     assert.equal(oberasbachEntry.streetCount, 271);
     assert.equal(oberasbachEntry.poiCount, 60);
     assert.equal(oberasbachEntry.contentHash, GOLDEN_OBERASBACH_HASH);
 
     // Prüfe jedes Dataset im Repository
     for (const ds of catalog.datasets) {
-      const dsDir = path.join(tmpOut, "datasets", ds.id);
+      assert.match(
+        ds.downloadPath,
+        new RegExp(`^datasets/${ds.id.replace(/[.*+?^${}()|[\\]\\]/g, "\\$&")}/[^/]+/[0-9a-f]{64}/package\\.json$`)
+      );
+      const dsDir = path.dirname(path.join(tmpOut, ds.downloadPath));
       assert.ok(fs.existsSync(dsDir), `Dataset-Verzeichnis fehlt: ${dsDir}`);
       assert.ok(fs.existsSync(path.join(dsDir, "package.json")));
       assert.ok(fs.existsSync(path.join(dsDir, "manifest.json")));
@@ -75,6 +79,100 @@ test("1.1 Publisher erzeugt vollständiges statisches Repository-Layout mit mani
   } finally {
     if (fs.existsSync(tmpSource)) fs.rmSync(tmpSource, { recursive: true, force: true });
     if (fs.existsSync(tmpOut)) fs.rmSync(tmpOut, { recursive: true, force: true });
+  }
+});
+
+test("1.6 package.id ist kanonisch; Dateiname ist irrelevant und doppelte IDs werden blockiert", async () => {
+  const tmpSource = path.join(ROOT, "tests/scratch-pub-canonical-id");
+  const tmpOut = path.join(ROOT, "dist/.tmp-test-publisher-canonical-id");
+  try {
+    fs.mkdirSync(tmpSource, { recursive: true });
+    fs.copyFileSync(path.join(ROOT, "data/cities/oberasbach.json"), path.join(tmpSource, "beliebiger-dateiname.json"));
+    await publisher.publishRepository({ sourceDir: tmpSource, outputDir: tmpOut, precompress: false });
+    const catalog = JSON.parse(fs.readFileSync(path.join(tmpOut, "catalog.json"), "utf8"));
+    assert.deepEqual(catalog.datasets.map(entry => entry.id), ["de-oberasbach-fire-training"]);
+    assert.match(catalog.datasets[0].downloadPath, /^datasets\/de-oberasbach-fire-training\//);
+
+    fs.copyFileSync(path.join(ROOT, "data/cities/oberasbach.json"), path.join(tmpSource, "zweite-kopie.json"));
+    await assert.rejects(
+      publisher.publishRepository({ sourceDir: tmpSource, outputDir: tmpOut, precompress: false }),
+      { code: "DUPLICATE_DATASET_ID" }
+    );
+  } finally {
+    if (fs.existsSync(tmpSource)) fs.rmSync(tmpSource, { recursive: true, force: true });
+    if (fs.existsSync(tmpOut)) fs.rmSync(tmpOut, { recursive: true, force: true });
+  }
+});
+
+test("1.7 immutable URLs behalten alte Versionen und schützen vor stale caches", async () => {
+  const tmpSource = path.join(ROOT, "tests/scratch-pub-history");
+  const tmpOut = path.join(ROOT, "dist/.tmp-test-publisher-history");
+  try {
+    fs.mkdirSync(tmpSource, { recursive: true });
+    const target = path.join(tmpSource, "olpe.json");
+    fs.copyFileSync(path.join(ROOT, "tests/fixtures/update/olpe-v1.json"), target);
+    await publisher.publishRepository({ sourceDir: tmpSource, outputDir: tmpOut, precompress: false });
+    const catalogV1 = JSON.parse(fs.readFileSync(path.join(tmpOut, "catalog.json"), "utf8"));
+    const v1Entry = catalogV1.datasets[0];
+    const v1Bytes = fs.readFileSync(path.join(tmpOut, v1Entry.downloadPath));
+
+    fs.copyFileSync(path.join(ROOT, "tests/fixtures/update/olpe-v2.json"), target);
+    await publisher.publishRepository({ sourceDir: tmpSource, outputDir: tmpOut, precompress: false });
+    const catalogV2 = JSON.parse(fs.readFileSync(path.join(tmpOut, "catalog.json"), "utf8"));
+    const v2Entry = catalogV2.datasets[0];
+
+    assert.notEqual(v2Entry.contentHash, v1Entry.contentHash, "Neuer semantischer Hash erwartet");
+    assert.notEqual(v2Entry.downloadPath, v1Entry.downloadPath, "Neuer Hash muss eine neue URL erzeugen");
+    assert.deepEqual(fs.readFileSync(path.join(tmpOut, v1Entry.downloadPath)), v1Bytes, "Alte URL und Bytes müssen erhalten bleiben");
+    assert.ok(fs.existsSync(path.join(tmpOut, v2Entry.downloadPath)), "Neue immutable URL muss existieren");
+  } finally {
+    if (fs.existsSync(tmpSource)) fs.rmSync(tmpSource, { recursive: true, force: true });
+    if (fs.existsSync(tmpOut)) fs.rmSync(tmpOut, { recursive: true, force: true });
+  }
+});
+
+test("1.8 Publisher und Catalog sind bei gleichem Input byte-identisch", async () => {
+  const tmpSource = path.join(ROOT, "tests/scratch-pub-determinism");
+  const tmpOut = path.join(ROOT, "dist/.tmp-test-publisher-determinism");
+  const digestTree = root => {
+    const files = [];
+    const visit = dir => fs.readdirSync(dir, { withFileTypes: true })
+      .sort((a, b) => a.name.localeCompare(b.name))
+      .forEach(entry => {
+        const full = path.join(dir, entry.name);
+        if (entry.isDirectory()) visit(full);
+        else files.push(`${path.relative(root, full)}:${crypto.createHash("sha256").update(fs.readFileSync(full)).digest("hex")}`);
+      });
+    visit(root);
+    return files;
+  };
+  try {
+    fs.mkdirSync(tmpSource, { recursive: true });
+    fs.copyFileSync(path.join(ROOT, "data/cities/oberasbach.json"), path.join(tmpSource, "source.json"));
+    await publisher.publishRepository({ sourceDir: tmpSource, outputDir: tmpOut, precompress: true });
+    const first = digestTree(tmpOut);
+    const firstCatalog = fs.readFileSync(path.join(tmpOut, "catalog.json"));
+    await new Promise(resolve => setTimeout(resolve, 10));
+    await publisher.publishRepository({ sourceDir: tmpSource, outputDir: tmpOut, precompress: true });
+    assert.deepEqual(digestTree(tmpOut), first);
+    assert.deepEqual(fs.readFileSync(path.join(tmpOut, "catalog.json")), firstCatalog);
+  } finally {
+    if (fs.existsSync(tmpSource)) fs.rmSync(tmpSource, { recursive: true, force: true });
+    if (fs.existsSync(tmpOut)) fs.rmSync(tmpOut, { recursive: true, force: true });
+  }
+});
+
+test("1.9 CatalogProvider löst immutable Pfade auch unter Repository-Subpaths auf", async () => {
+  const tmpRoot = path.join(ROOT, "dist/.tmp-test-publisher-subpath");
+  const nestedOut = path.join(tmpRoot, "nested/repository");
+  try {
+    await publisher.publishRepository({ outputDir: nestedOut, precompress: false });
+    const provider = datasetProvider.createCatalogDatasetProvider(path.join(nestedOut, "catalog.json"));
+    const downloaded = await provider.downloadDataset("de-oberasbach-fire-training");
+    assert.equal(downloaded.dataset.package.id, "de-oberasbach-fire-training");
+    assert.equal(downloaded.dataset.package.contentHash, GOLDEN_OBERASBACH_HASH);
+  } finally {
+    if (fs.existsSync(tmpRoot)) fs.rmSync(tmpRoot, { recursive: true, force: true });
   }
 });
 

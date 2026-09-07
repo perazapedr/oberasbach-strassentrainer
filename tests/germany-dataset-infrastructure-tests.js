@@ -150,7 +150,10 @@ test("2.1 de-nw und de-by Manifeste sind wohlgeformt und mit regions.json verknÃ
   const manifestNW = loadManifest(MANIFEST_NW_PATH, regionsConfig);
   assert.equal(manifestNW.regionId, "de-nw");
   assert.ok(regionsConfig.regions[manifestNW.regionId]);
-  assert.equal(manifestNW.datasets.length, 4);
+  assert.equal(manifestNW.datasets.length, 5);
+  assert.ok(manifestNW.datasets.some(dataset =>
+    dataset.datasetId === "de-nw-kreis-olpe" && dataset.targetType === "district"
+  ));
 
   const manifestBY = loadManifest(MANIFEST_BY_PATH, regionsConfig);
   assert.equal(manifestBY.regionId, "de-by");

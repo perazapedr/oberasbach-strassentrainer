@@ -552,8 +552,27 @@ function targetsForTrainingArea(context, area) {
       fireStations: context.allFireStations.filter(station => membership.poiIds.has(station.id))
     };
   }
+  const streets = context.allStreetTargets.filter(target => Array.isArray(target.areaIds) && target.areaIds.includes(area.id));
+  const municipalityStreetTargets = context.metadata?.datasetKind === "district"
+    && area.areaType === "municipality"
+    ? (() => {
+      const nameCounts = new Map();
+      for (const target of streets) {
+        const canonicalName = String(target.canonicalName || target.displayName || "").trim();
+        const normalizedName = geometryApi.normalizeStreetName(canonicalName);
+        nameCounts.set(normalizedName, (nameCounts.get(normalizedName) || 0) + 1);
+      }
+      return streets.map(target => {
+        const canonicalName = String(target.canonicalName || target.displayName || "").trim();
+        const normalizedName = geometryApi.normalizeStreetName(canonicalName);
+        return nameCounts.get(normalizedName) === 1 && canonicalName
+          ? { ...target, displayName: canonicalName }
+          : target;
+      });
+    })()
+    : streets;
   return {
-    streets: context.allStreetTargets.filter(target => Array.isArray(target.areaIds) && target.areaIds.includes(area.id)),
+    streets: municipalityStreetTargets,
     pois: context.allPoiTargets.filter(target => Array.isArray(target.areaIds) && target.areaIds.includes(area.id)),
     fireStations: context.allFireStations.filter(target => Array.isArray(target.areaIds) && target.areaIds.includes(area.id))
   };
@@ -878,7 +897,10 @@ function renderTrainingAreaSelect(context) {
   if (els.createTrainingAreaButton) els.createTrainingAreaButton.disabled = !context?.metadata?.id;
   if (areas.length === 0) {
     els.trainingAreaFieldGroup.classList.remove("hidden");
-    els.trainingAreaSelect.innerHTML = '<option value="">Gesamte Stadt</option>';
+    const wholeDatasetLabel = context?.metadata?.datasetKind === "district"
+      ? `Gesamter ${cityName(context.metadata)}`
+      : "Gesamte Stadt";
+    els.trainingAreaSelect.innerHTML = `<option value="">${wholeDatasetLabel}</option>`;
     els.trainingAreaSelect.value = "";
     if (els.deleteTrainingAreaButton) els.deleteTrainingAreaButton.classList.add("hidden");
     return;
@@ -888,12 +910,17 @@ function renderTrainingAreaSelect(context) {
 
   const defaultOption = document.createElement("option");
   defaultOption.value = "";
-  defaultOption.textContent = "Gesamte Stadt";
+  defaultOption.textContent = context?.metadata?.datasetKind === "district"
+    ? `Gesamter ${cityName(context.metadata)}`
+    : "Gesamte Stadt";
   els.trainingAreaSelect.appendChild(defaultOption);
 
   const administrativeAreas = areas.filter(area => !customTrainingAreaApi || !customTrainingAreaApi.isUserArea(area));
   const userAreas = areas.filter(area => customTrainingAreaApi && customTrainingAreaApi.isUserArea(area));
-  const topLevel = administrativeAreas.filter(a => !a.parentId || !administrativeAreas.some(p => p.id === a.parentId));
+  const byAreaName = (a, b) => String(a.name || "").localeCompare(String(b.name || ""), "de", { sensitivity: "base" });
+  const topLevel = administrativeAreas
+    .filter(a => !a.parentId || !administrativeAreas.some(p => p.id === a.parentId))
+    .sort(byAreaName);
   const childMap = new Map();
   for (const area of administrativeAreas) {
     if (area.parentId && administrativeAreas.some(p => p.id === area.parentId)) {
@@ -915,7 +942,7 @@ function renderTrainingAreaSelect(context) {
     opt.textContent = `${top.name} (${top.streetCount || 0} Straßen)`;
     els.trainingAreaSelect.appendChild(opt);
 
-    const children = childMap.get(top.id) || [];
+    const children = (childMap.get(top.id) || []).sort(byAreaName);
     for (const child of children) {
       const childOpt = document.createElement("option");
       childOpt.value = child.id;
@@ -984,7 +1011,15 @@ function activateTrainingArea(areaId, options = {}) {
   roundPreparationToken += 1;
   deactivateExamHistoryGuard();
   examGeometryByRound.clear();
-  gameEngine.resetGame();
+  // A TrainingArea switch starts a fresh free game identity. A bare reset
+  // leaves gameId=null, which would make every first post-switch round share
+  // the deduplication key "null:round:1" and silently lose statistics.
+  gameEngine.startGame({
+    ...MODE_CONFIGS.free,
+    contentSelection: contentSettings.contentSelection,
+    poiCategories: [...contentSettings.poiCategories],
+    showTargetCategory: contentSettings.showTargetCategory
+  });
   mapView.clearRound();
   fireStationLayers.clearLayers();
   contentRepository.lastTargetId = null;

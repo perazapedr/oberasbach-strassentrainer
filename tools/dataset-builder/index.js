@@ -16,6 +16,7 @@ function usage() {
     "Options:",
     "  --relation-id ID   Select an explicit administrative relation",
     "  --admin-level LEVEL Target admin_level (default: 8)",
+    "  --target-type TYPE  municipality (default) or district",
     "  --dataset-id ID    Explicit package / dataset ID",
     "  --report FILE      Write a machine-readable build report",
     "  --state NAME       State metadata (default: Nordrhein-Westfalen)",
@@ -27,11 +28,12 @@ function usage() {
 }
 
 function parseArgs(argv) {
-  const options = { state: "Nordrhein-Westfalen", country: "Deutschland", verbose: false, keepWork: false, adminLevel: 8 };
+  const options = { state: "Nordrhein-Westfalen", country: "Deutschland", verbose: false, keepWork: false, adminLevel: 8, targetType: "municipality" };
   const valueOptions = new Map([
     ["--pbf", "pbf"], ["--municipality", "municipality"], ["--output", "output"],
     ["--relation-id", "relationId"], ["--admin-level", "adminLevel"], ["--dataset-id", "datasetId"],
-    ["--report", "report"], ["--state", "state"], ["--country", "country"], ["--version", "version"]
+    ["--report", "report"], ["--state", "state"], ["--country", "country"], ["--version", "version"],
+    ["--target-type", "targetType"]
   ]);
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
@@ -58,6 +60,9 @@ function parseArgs(argv) {
   if (options.version !== undefined) {
     options.version = String(options.version).trim();
     if (!options.version) throw new Error("--version must be non-empty string.");
+  }
+  if (!["municipality", "district"].includes(options.targetType)) {
+    throw new Error("--target-type must be municipality or district.");
   }
   return options;
 }
@@ -150,12 +155,12 @@ async function build(options) {
   try {
     phase("Reading PBF header …");
     const pbfTimestamp = await osmiumTimestamp(options.pbf, options.verbose);
-    phase("Finding municipality boundary …");
+    phase(`Finding ${options.targetType} boundary …`);
     const relationOutput = await run("osmium", [
       "tags-filter", "-R", "-f", "opl", options.pbf, "r/boundary=administrative"
     ], options);
-    const relation = core.selectMunicipalityRelation(
-      core.parseBoundaryRelationOpl(relationOutput.stdout), options.municipality, options.relationId, options.adminLevel
+    const relation = core.selectTargetRelation(
+      core.parseBoundaryRelationOpl(relationOutput.stdout), options.municipality, options.relationId, options.adminLevel, options.targetType
     );
 
     phase(`Resolving boundary relation ${relation.id} …`);
@@ -189,6 +194,7 @@ async function build(options) {
       boundary,
       featureCollections: features,
       municipalityName: options.municipality,
+      targetType: options.targetType,
       datasetId: options.datasetId,
       state: options.state,
       country: options.country,
@@ -217,6 +223,8 @@ async function build(options) {
       municipalityRelation: relation.id,
       adminLevel: Number(relation.tags.admin_level),
       municipalityKey: relation.tags["de:amtlicher_gemeindeschluessel"] || null,
+      rawRelationName: relation.tags.name || null,
+      datasetKind: assembled.packageData.package.datasetKind,
       boundaryType: boundary.type,
       buildSeconds: Number(elapsedSeconds.toFixed(3)),
       processRssDeltaBytes: Math.max(0, process.memoryUsage().rss - initialRss),
@@ -229,6 +237,8 @@ async function build(options) {
       packageBytes: fs.statSync(options.output).size,
       contentHash: assembled.packageData.package.contentHash,
       counts: assembled.diagnostics,
+      municipalities: assembled.diagnostics.municipalities || [],
+      duplicateStreetNamesAcrossMunicipalities: assembled.diagnostics.duplicateStreetNamesAcrossMunicipalities || [],
       areaClassification: assembled.diagnostics.areaClassificationReport || null,
       osmiumWarnings: [boundaryExport.stderr, featureExport.stderr].filter(Boolean).join("\n").trim() || null,
       workDirectory: options.keepWork ? workDir : null

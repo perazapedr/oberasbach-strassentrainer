@@ -1,0 +1,31 @@
+{
+  "schemaVersion": 1,
+  "datasetId": "de-nw-siegen",
+  "name": "Siegen",
+  "displayName": "Siegen",
+  "version": "2026.09.05",
+  "contentHash": "sha256:f3d357f23ca65ea9d6fbb14dbd254d4e8955cb3ccaa3359786757fa87f4e95bb",
+  "publishedAt": "2026-09-05T20:22:06.000Z",
+  "counts": {
+    "streetCount": 1176,
+    "poiCount": 426,
+    "areaCount": 23
+  },
+  "files": {
+    "package": {
+      "path": "package.json",
+      "sizeBytes": 4179180,
+      "sha256": "fb82556d2bb34426206005b71ef552cebd7295755e1ff1c320f83d8d173d40c1"
+    },
+    "gzip": {
+      "path": "package.json.gz",
+      "sizeBytes": 428494,
+      "sha256": "1f2d6b89d788b44c348e2b6832783cdf4b417c67499f9d9e6b00f06463a20ed5"
+    },
+    "brotli": {
+      "path": "package.json.br",
+      "sizeBytes": 284290,
+      "sha256": "f92d0456796f25c459ea2c2e8dd9330bff9ab1b440e53a844e69119a270a4f4a"
+    }
+  }
+}

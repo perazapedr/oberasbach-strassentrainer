@@ -32,6 +32,43 @@ function assertSafeDatasetId(id) {
   return id;
 }
 
+function assertSafePathSegment(value, label) {
+  const segment = String(value || "").trim();
+  if (!segment || !/^[a-zA-Z0-9_.-]+$/.test(segment) || segment === "." || segment === "..") {
+    throw new PublisherError("INVALID_IMMUTABLE_PATH", `Ungültiges ${label} für immutable Publishing: "${value}".`);
+  }
+  return segment;
+}
+
+function packageTimestamp(parsedPackage) {
+  const pkg = parsedPackage && parsedPackage.package ? parsedPackage.package : {};
+  const candidates = [pkg.updatedAt, pkg.createdAt]
+    .map(value => typeof value === "string" ? value.trim() : "")
+    .filter(Boolean)
+    .map(value => ({ value, time: Date.parse(value) }))
+    .filter(candidate => Number.isFinite(candidate.time))
+    .sort((a, b) => b.time - a.time || a.value.localeCompare(b.value));
+  if (!candidates.length) {
+    throw new PublisherError(
+      "MISSING_DETERMINISTIC_TIMESTAMP",
+      `Package "${pkg.id || "unknown"}" benötigt package.updatedAt oder package.createdAt für deterministisches Publishing.`
+    );
+  }
+  return new Date(candidates[0].time).toISOString();
+}
+
+function immutableArtifactPaths(datasetId, parsedPackage, packageBuffer) {
+  const version = assertSafePathSegment(parsedPackage.package && parsedPackage.package.version, "Package-Version");
+  const artifactHash = sha256Buffer(packageBuffer);
+  const base = `datasets/${datasetId}/${version}/${artifactHash}`;
+  return {
+    artifactHash,
+    directory: base,
+    packagePath: `${base}/package.json`,
+    manifestPath: `${base}/manifest.json`
+  };
+}
+
 function assertPathInsideDir(baseDir, targetPath) {
   const relative = path.relative(path.resolve(baseDir), path.resolve(targetPath));
   if (relative.startsWith("..") || path.isAbsolute(relative)) {
@@ -84,7 +121,7 @@ function loadAndValidatePackage(filePath) {
   };
 }
 
-function buildCatalogEntry(datasetId, parsedPackage, rawBuffer, gzBuffer, brBuffer) {
+function buildCatalogEntry(datasetId, parsedPackage, rawBuffer, gzBuffer, brBuffer, artifactPaths) {
   const pkg = parsedPackage.package || {};
   const city = parsedPackage.city || {};
 
@@ -103,8 +140,9 @@ function buildCatalogEntry(datasetId, parsedPackage, rawBuffer, gzBuffer, brBuff
     if (Number.isSafeInteger(parsedId)) osmRelationId = parsedId;
   }
 
-  const relativePackagePath = `datasets/${datasetId}/package.json`;
-  const relativeManifestPath = `datasets/${datasetId}/manifest.json`;
+  const paths = artifactPaths || immutableArtifactPaths(datasetId, parsedPackage, rawBuffer);
+  const relativePackagePath = paths.packagePath;
+  const relativeManifestPath = paths.manifestPath;
 
   const entry = {
     id: datasetId,
@@ -215,24 +253,40 @@ async function publishRepository(options = {}) {
   // 1. Sammle alle Quell-Dateien
   const filesToProcess = new Map();
 
+  function registerPackageFile(filePath, allowNonPackage) {
+    let parsed;
+    try {
+      parsed = JSON.parse(fs.readFileSync(filePath, "utf8"));
+    } catch (err) {
+      throw new PublisherError("INVALID_JSON", `Ungültiges JSON in Quellverzeichnis: ${filePath}`, {
+        filePath,
+        cause: err
+      });
+    }
+    if (!parsed || typeof parsed !== "object" || !parsed.package || !parsed.city) {
+      if (allowNonPackage) {
+        console.log(`  [Info] Überspringe Nicht-Paket-Datei in Quellverzeichnis: ${path.basename(filePath)}`);
+        return;
+      }
+      throw new PublisherError("INVALID_PACKAGE_SOURCE", `Einzuschließende Datei ist kein Dataset-Package: ${filePath}`);
+    }
+    const id = assertSafeDatasetId(parsed.package.id);
+    if (filesToProcess.has(id)) {
+      throw new PublisherError("DUPLICATE_DATASET_ID", `Doppelte package.id "${id}" in Publisher-Quellen.`, {
+        firstFile: filesToProcess.get(id),
+        duplicateFile: filePath
+      });
+    }
+    filesToProcess.set(id, filePath);
+  }
+
   if (fs.existsSync(sourceDir)) {
-    const entries = fs.readdirSync(sourceDir);
+    const entries = fs.readdirSync(sourceDir).sort((a, b) => a.localeCompare(b, "de"));
     for (const entry of entries) {
       if (entry.endsWith(".json") && !entry.startsWith(".")) {
         const full = path.join(sourceDir, entry);
         if (fs.statSync(full).isFile()) {
-          const id = path.basename(entry, ".json");
-          filesToProcess.set(id, full);
-          try {
-            const raw = fs.readFileSync(full, "utf8");
-            const parsed = JSON.parse(raw);
-            if (parsed && typeof parsed === "object" && parsed.package && parsed.city) {
-              const id = parsed.package.id || path.basename(entry, ".json");
-              filesToProcess.set(id, full);
-            } else {
-              console.log(`  [Info] Überspringe Nicht-Paket-Datei in Quellverzeichnis: ${entry}`);
-            }
-          } catch (_) {}
+          registerPackageFile(full, true);
         }
       }
     }
@@ -241,21 +295,12 @@ async function publishRepository(options = {}) {
   // Zirndorf (aus fixtures) automatisch aufnehmen, falls im Standard-Modus vorhanden
   const defaultZirndorfPath = path.join(ROOT, "tests/fixtures/de-by-zirndorf.json");
   if (!options.sourceDir && fs.existsSync(defaultZirndorfPath) && !filesToProcess.has("de-by-zirndorf")) {
-    filesToProcess.set("de-by-zirndorf", defaultZirndorfPath);
+    registerPackageFile(defaultZirndorfPath, false);
   }
 
   for (const inc of includes) {
     if (fs.existsSync(inc)) {
-      const id = path.basename(inc, ".json");
-      filesToProcess.set(id, inc);
-      try {
-        const raw = fs.readFileSync(inc, "utf8");
-        const parsed = JSON.parse(raw);
-        const id = parsed.package?.id || path.basename(inc, ".json");
-        filesToProcess.set(id, inc);
-      } catch (err) {
-        throw new PublisherError("INVALID_JSON", `Einzuschließende Datei ungültig: ${inc}`);
-      }
+      registerPackageFile(inc, false);
     } else {
       throw new PublisherError("INCLUDE_NOT_FOUND", `Einzuschließende Datei nicht gefunden: ${inc}`);
     }
@@ -303,22 +348,33 @@ async function publishRepository(options = {}) {
   const stagingDir = path.join(parentOutputDir, `.tmp-dataset-repository-${runId}`);
   fs.mkdirSync(stagingDir, { recursive: true });
 
-  const publishedAt = new Date().toISOString();
+  const catalogGeneratedAt = options.generatedAt
+    ? new Date(options.generatedAt).toISOString()
+    : loadedDatasets.map(ds => packageTimestamp(ds.parsed)).sort().at(-1);
   const catalogDatasets = [];
 
   try {
     const datasetsStagingDir = path.join(stagingDir, "datasets");
-    fs.mkdirSync(datasetsStagingDir, { recursive: true });
+    const previousDatasetsDir = path.join(outputDir, "datasets");
+    if (fs.existsSync(previousDatasetsDir)) {
+      fs.cpSync(previousDatasetsDir, datasetsStagingDir, { recursive: true, errorOnExist: false });
+    } else {
+      fs.mkdirSync(datasetsStagingDir, { recursive: true });
+    }
 
     for (const ds of loadedDatasets) {
-      const targetDatasetDir = path.join(datasetsStagingDir, ds.id);
+      const canonicalJson = JSON.stringify(ds.parsed, null, 2) + "\n";
+      const packageBuffer = Buffer.from(canonicalJson, "utf8");
+      const artifactPaths = immutableArtifactPaths(ds.id, ds.parsed, packageBuffer);
+      const targetDatasetDir = path.join(stagingDir, artifactPaths.directory);
       assertPathInsideDir(stagingDir, targetDatasetDir);
       fs.mkdirSync(targetDatasetDir, { recursive: true });
 
       // A. Write package.json (formatiertes, kanonisches JSON)
-      const canonicalJson = JSON.stringify(ds.parsed, null, 2) + "\n";
-      const packageBuffer = Buffer.from(canonicalJson, "utf8");
       const packageFile = path.join(targetDatasetDir, "package.json");
+      if (fs.existsSync(packageFile) && !fs.readFileSync(packageFile).equals(packageBuffer)) {
+        throw new PublisherError("IMMUTABLE_URL_COLLISION", `Immutable Package-URL würde andere Bytes erhalten: ${artifactPaths.packagePath}`);
+      }
       fs.writeFileSync(packageFile, packageBuffer);
 
       // B. Precompression (.gz und .br)
@@ -335,19 +391,23 @@ async function publishRepository(options = {}) {
       }
 
       // C. Write manifest.json
-      const manifest = buildManifest(ds.id, ds.parsed, packageBuffer, gzBuffer, brBuffer, publishedAt);
+      const manifest = buildManifest(ds.id, ds.parsed, packageBuffer, gzBuffer, brBuffer, packageTimestamp(ds.parsed));
       const manifestFile = path.join(targetDatasetDir, "manifest.json");
-      fs.writeFileSync(manifestFile, JSON.stringify(manifest, null, 2) + "\n", "utf8");
+      const manifestBuffer = Buffer.from(JSON.stringify(manifest, null, 2) + "\n", "utf8");
+      if (fs.existsSync(manifestFile) && !fs.readFileSync(manifestFile).equals(manifestBuffer)) {
+        throw new PublisherError("IMMUTABLE_URL_COLLISION", `Immutable Manifest-URL würde andere Bytes erhalten: ${artifactPaths.manifestPath}`);
+      }
+      fs.writeFileSync(manifestFile, manifestBuffer);
 
       // D. Collect catalog entry
-      const catEntry = buildCatalogEntry(ds.id, ds.parsed, packageBuffer, gzBuffer, brBuffer);
+      const catEntry = buildCatalogEntry(ds.id, ds.parsed, packageBuffer, gzBuffer, brBuffer, artifactPaths);
       catalogDatasets.push(catEntry);
     }
 
     // 4. Generate catalog.json
     const catalog = {
       schemaVersion: 1,
-      generatedAt: publishedAt,
+      generatedAt: catalogGeneratedAt,
       datasets: catalogDatasets
     };
 
@@ -455,6 +515,8 @@ module.exports = {
   loadAndValidatePackage,
   buildCatalogEntry,
   buildManifest,
+  immutableArtifactPaths,
+  packageTimestamp,
   assertSafeDatasetId,
   assertPathInsideDir
 };

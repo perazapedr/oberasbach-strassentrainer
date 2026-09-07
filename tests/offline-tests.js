@@ -93,7 +93,7 @@ test("4. Service Worker definiert saubere Cache-Version und alle App-Shell-Datei
   const sw = require("../sw.js");
 
   assert.ok(sw.STATIC_CACHE.startsWith("strassentrainer-static-"), "Cache-Name muss strassentrainer-static- Präfix tragen");
-  assert.equal(sw.STATIC_CACHE, "strassentrainer-static-v10");
+  assert.equal(sw.STATIC_CACHE, "strassentrainer-static-v11");
   assert.ok(Array.isArray(sw.STATIC_ASSETS), "STATIC_ASSETS muss ein Array sein");
   assert.ok(sw.STATIC_ASSETS.length >= 20, "STATIC_ASSETS muss alle Kern-Dateien umfassen");
 

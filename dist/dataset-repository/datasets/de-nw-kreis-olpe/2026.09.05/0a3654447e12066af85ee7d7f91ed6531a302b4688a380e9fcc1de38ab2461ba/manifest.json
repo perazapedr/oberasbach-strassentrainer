@@ -1,0 +1,31 @@
+{
+  "schemaVersion": 1,
+  "datasetId": "de-nw-kreis-olpe",
+  "name": "Kreis Olpe",
+  "displayName": "Kreis Olpe",
+  "version": "2026.09.05",
+  "contentHash": "sha256:bc9d6ff8e2d001598f40f7e1065030c77205cdcd368a0a3265ad399747d4cec5",
+  "publishedAt": "2026-09-05T20:22:06.000Z",
+  "counts": {
+    "streetCount": 2756,
+    "poiCount": 623,
+    "areaCount": 7
+  },
+  "files": {
+    "package": {
+      "path": "package.json",
+      "sizeBytes": 8866559,
+      "sha256": "0a3654447e12066af85ee7d7f91ed6531a302b4688a380e9fcc1de38ab2461ba"
+    },
+    "gzip": {
+      "path": "package.json.gz",
+      "sizeBytes": 873103,
+      "sha256": "6f11e16a57fb4d1805da04838df6a26f0645b3727f453b8d14fb154186c54b43"
+    },
+    "brotli": {
+      "path": "package.json.br",
+      "sizeBytes": 579595,
+      "sha256": "66c3598d5f61d15f9f385ac0c56132b9c198ae7025872f04e5fd03acc953310c"
+    }
+  }
+}

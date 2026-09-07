@@ -51,6 +51,15 @@ test("Boundary Selection akzeptiert nur die eindeutige administrative Gemeinde",
   assert.throws(() => core.selectMunicipalityRelation([], "Olpe"), /No admin_level=8/);
 });
 
+test("District Selection nutzt explizite Relation trotz fehlerhaftem PBF-Anzeigenamen", () => {
+  const selected = core.selectTargetRelation([{
+    id: 1891506,
+    tags: { boundary: "administrative", admin_level: "6", name: "Kreis %Olpe", "de:amtlicher_gemeindeschluessel": "05966" }
+  }], "Kreis Olpe", 1891506, 6, "district");
+  assert.equal(selected.id, 1891506);
+  assert.equal(selected.tags["de:amtlicher_gemeindeschluessel"], "05966");
+});
+
 test("OPL-Tags einschließlich Gemeindeschlüssel werden verlustfrei gelesen", () => {
   const [relation] = core.parseBoundaryRelationOpl(
     "r62591 v1 dV c1 t2026-09-01T00:00:00Z i1 u Ttype=boundary,boundary=administrative,admin_level=8,name=Olpe,de:amtlicher_gemeindeschluessel=05966024\n"
@@ -60,12 +69,24 @@ test("OPL-Tags einschließlich Gemeindeschlüssel werden verlustfrei gelesen", (
   assert.equal(relation.tags["de:amtlicher_gemeindeschluessel"], "05966024");
 });
 
+test("OPL-Tags dekodieren Osmiums abgeschlossene Unicode-Codepoint-Escapes", () => {
+  const tags = core.parseOplTags("name=Kreis%20%Olpe,note=100%25%,symbol=%1f600%");
+  assert.equal(tags.name, "Kreis Olpe");
+  assert.equal(tags.note, "100%");
+  assert.equal(tags.symbol, "😀");
+});
+
 test("LineStrings werden an der echten Polygon-Grenze geclippt", () => {
   const result = core.clipLineStringToBoundary([[6.99, 51.02], [7.02, 51.02], [7.05, 51.02]], boundary);
   assert.ok(result.length >= 1);
   const flat = result.flat();
   assert.ok(flat.every(([lon]) => lon >= 7 - 1e-9 && lon <= 7.04 + 1e-9));
   assert.deepEqual(core.clipLineStringToBoundary([[7.01, 51.01]], boundary), []);
+  assert.deepEqual(
+    core.clipLineStringToBoundary([[6.99999999999999, 51.02], [7.00000000000001, 51.02]], boundary),
+    [],
+    "Numerische Split-Sliver unter einem Millimeter dürfen keine trainierbaren Grenzstraßen werden"
+  );
 });
 
 test("Polygon und MultiPolygon bleiben im aktuellen GeoJSON-Modell gültig", () => {
@@ -100,6 +121,47 @@ test("Straßenfilter, Way-Merge, Aliases und IDs sind deterministisch", () => {
   assert.deepEqual(streets[0].aliases, ["Alte Hauptstraße", "Hauptstr."]);
   assert.equal(streets[0].geometry.coordinates.length, 2);
   assert.deepEqual(streets, core.buildStreets(collected.streetWays, "osm-relation-8"));
+});
+
+test("District Street Identity trennt gleiche Namen nach Municipality und bleibt build-order-stabil", () => {
+  const areas = [
+    { id: "osm-relation-1", name: "Olpe", polygon: { type: "Polygon", coordinates: [[[7, 51], [7.02, 51], [7.02, 51.04], [7, 51.04], [7, 51]]] } },
+    { id: "osm-relation-2", name: "Wenden", polygon: { type: "Polygon", coordinates: [[[7.02, 51], [7.04, 51], [7.04, 51.04], [7.02, 51.04], [7.02, 51]]] } }
+  ];
+  const ways = [
+    { id: 10, name: "Hauptstraße", tags: {}, lines: [[[7.005, 51.01], [7.015, 51.01]]] },
+    { id: 11, name: "Hauptstraße", tags: {}, lines: [[[7.006, 51.01], [7.016, 51.01]]] },
+    { id: 20, name: "Hauptstraße", tags: {}, lines: [[[7.025, 51.01], [7.035, 51.01]]] },
+    { id: 30, name: "Grenzweg", tags: {}, lines: [[[7.01, 51.02], [7.03, 51.02]]] }
+  ];
+  const diagnostics = {};
+  const first = core.buildDistrictStreets(new Map(ways.map(way => [way.id, way])), "osm-relation-99", areas, diagnostics);
+  const second = core.buildDistrictStreets(new Map([...ways].reverse().map(way => [way.id, way])), "osm-relation-99", [...areas].reverse(), {});
+  assert.deepEqual(first, second);
+  const main = first.filter(street => street.name === "Hauptstraße");
+  assert.equal(main.length, 2);
+  assert.notEqual(main[0].id, main[1].id);
+  assert.deepEqual(main.find(street => street.municipalityName === "Olpe").osmWayIds, [10, 11]);
+  assert.ok(main.every(street => street.displayName === `Hauptstraße · ${street.municipalityName}`));
+  const border = first.filter(street => street.name === "Grenzweg");
+  assert.equal(border.length, 2);
+  assert.deepEqual(border.map(street => street.municipalityName).sort(), ["Olpe", "Wenden"]);
+  assert.equal(diagnostics.crossMunicipalityWayCount, 1);
+  assert.equal(diagnostics.boundaryStreetCount, 2);
+});
+
+test("District contentHash umfasst Municipality Membership und Display-Metadaten", () => {
+  const base = {
+    package: { id: "de-nw-kreis-test", type: "osm", datasetKind: "district", version: "2026.09.05" },
+    city: { id: "osm-relation-99", name: "Kreis Test", bounds: { south: 51, west: 7, north: 52, east: 8 }, center: { lat: 51.5, lon: 7.5 } },
+    streets: [{ id: "s", cityId: "osm-relation-99", name: "Hauptstraße", displayName: "Hauptstraße · A", municipalityId: "osm-relation-1", municipalityName: "A", areaIds: ["osm-relation-1"], osmWayIds: [1], geometry: { type: "MultiLineString", coordinates: [[[7.1, 51.1], [7.2, 51.2]]] } }],
+    pois: [], areas: []
+  };
+  const changed = JSON.parse(JSON.stringify(base));
+  changed.streets[0].municipalityId = "osm-relation-2";
+  changed.streets[0].municipalityName = "B";
+  changed.streets[0].areaIds = ["osm-relation-2"];
+  assert.notEqual(validator.computePackageHash(base), validator.computePackageHash(changed));
 });
 
 test("POI-Registry klassifiziert Node, Way und Relation", () => {

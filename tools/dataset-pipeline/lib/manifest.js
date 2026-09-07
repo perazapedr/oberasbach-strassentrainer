@@ -165,11 +165,23 @@ function loadManifest(filePath, regionsConfig = null) {
       throw new ManifestError("MANIFEST_INVALID_ADMIN_LEVEL", `Datensatz "${datasetId}" hat ungültiges adminLevel: ${ds.adminLevel}`);
     }
 
+    const targetType = String(ds.targetType || "municipality").trim();
+    if (!["municipality", "district"].includes(targetType)) {
+      throw new ManifestError("MANIFEST_INVALID_TARGET_TYPE", `Datensatz "${datasetId}" hat ungültigen targetType: ${ds.targetType}`);
+    }
+
+    const version = ds.version === undefined ? null : String(ds.version).trim();
+    if (ds.version !== undefined && !version) {
+      throw new ManifestError("MANIFEST_INVALID_VERSION", `Datensatz "${datasetId}" hat eine leere version.`);
+    }
+
     validatedDatasets.push({
       datasetId,
       name,
       relationId,
       adminLevel,
+      targetType,
+      ...(version ? { version } : {}),
       enabled: ds.enabled !== false
     });
   }
@@ -215,4 +227,3 @@ module.exports = {
   loadManifest,
   filterTargets
 };
-

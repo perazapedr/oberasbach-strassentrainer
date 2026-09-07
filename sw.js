@@ -3,7 +3,7 @@
  * Phase 15.1: Dataset-Source-Abstraktion
  */
 
-const STATIC_CACHE = "strassentrainer-static-v10";
+const STATIC_CACHE = "strassentrainer-static-v11";
 
 const STATIC_ASSETS = [
   "./",

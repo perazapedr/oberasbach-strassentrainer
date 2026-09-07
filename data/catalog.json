@@ -71,6 +71,39 @@
       "source": "osm-pbf"
     },
     {
+      "id": "de-nw-kreis-olpe",
+      "name": "Kreis Olpe",
+      "displayName": "Kreis Olpe",
+      "datasetKind": "district",
+      "state": "Nordrhein-Westfalen",
+      "district": null,
+      "country": "Deutschland",
+      "postalCodes": [],
+      "cityId": "osm-relation-1891506",
+      "osmType": "relation",
+      "osmRelationId": 1891506,
+      "packageType": "osm",
+      "version": "2026.09.07",
+      "contentHash": "sha256:1c076dc3988e06c6019b982a6521196b83830d2b7ab0b110f438aa1352be7455",
+      "streetCount": 2756,
+      "poiCount": 623,
+      "areaCount": 7,
+      "center": {
+        "lat": 51.0862459,
+        "lon": 7.9766682
+      },
+      "bounds": {
+        "south": 50.9245678,
+        "west": 7.7016776,
+        "north": 51.2483913,
+        "east": 8.2465681
+      },
+      "downloadPath": "cities/de-nw-kreis-olpe.json",
+      "fileSize": 8865919,
+      "title": "Kreis Olpe – OpenStreetMap-PBF-Dataset",
+      "source": "osm-pbf"
+    },
+    {
       "id": "de-nw-olpe",
       "name": "Olpe",
       "displayName": "Olpe",

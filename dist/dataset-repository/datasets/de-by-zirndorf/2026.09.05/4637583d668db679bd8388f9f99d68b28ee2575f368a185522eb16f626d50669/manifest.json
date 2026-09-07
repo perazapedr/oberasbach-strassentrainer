@@ -1,0 +1,31 @@
+{
+  "schemaVersion": 1,
+  "datasetId": "de-by-zirndorf",
+  "name": "Zirndorf",
+  "displayName": "Zirndorf",
+  "version": "2026.09.05",
+  "contentHash": "sha256:766615fdfddcbea7250d218f3b9f79c5f18e8e3b72fdcf99f7218e4867340f49",
+  "publishedAt": "2026-09-05T20:22:06.000Z",
+  "counts": {
+    "streetCount": 345,
+    "poiCount": 124,
+    "areaCount": 0
+  },
+  "files": {
+    "package": {
+      "path": "package.json",
+      "sizeBytes": 911271,
+      "sha256": "4637583d668db679bd8388f9f99d68b28ee2575f368a185522eb16f626d50669"
+    },
+    "gzip": {
+      "path": "package.json.gz",
+      "sizeBytes": 94596,
+      "sha256": "df73da4eb04e71e410851a718bd22581a4b99dc04f840e7b6e20e5995ac3c818"
+    },
+    "brotli": {
+      "path": "package.json.br",
+      "sizeBytes": 66460,
+      "sha256": "90bc1c9b6861f3aa43163e12d117aa309e3c5b63595cd12110ec1a3672f0be35"
+    }
+  }
+}

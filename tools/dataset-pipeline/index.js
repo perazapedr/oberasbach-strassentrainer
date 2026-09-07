@@ -169,10 +169,12 @@ function runBuilderProcess(target, pbfPath, stagingResult, regionMeta = null, ve
       "--municipality", target.name,
       "--relation-id", String(target.relationId),
       "--admin-level", String(target.adminLevel),
+      "--target-type", target.targetType || "municipality",
       "--dataset-id", target.datasetId,
       "--output", outputFile,
       "--report", reportFile
     ];
+    if (target.version) args.push("--version", target.version);
     if (regionMeta) {
       if (regionMeta.state) args.push("--state", regionMeta.state);
       if (regionMeta.country) args.push("--country", regionMeta.country);
@@ -217,7 +219,6 @@ function runBuilderProcess(target, pbfPath, stagingResult, regionMeta = null, ve
           outputFile,
           reportFile,
           buildReport,
-          peakRssBytes: buildReport?.processRssDeltaBytes || 0,
           peakRssBytes: buildReport?.processRssPeakBytes || buildReport?.processRssDeltaBytes || 0,
           childPeakRssBytes: buildReport?.processRssPeakBytes || 0,
           childRssDeltaBytes: buildReport?.processRssDeltaBytes || 0,
@@ -430,7 +431,6 @@ async function executePipeline(options) {
     const catBuild = buildCatalog({
       inputs: candidateInputs,
       output: stagedCatalogOutput,
-      generatedAt: preflightReport.osmTimestamp
       generatedAt: catalogTimestamp
     });
 

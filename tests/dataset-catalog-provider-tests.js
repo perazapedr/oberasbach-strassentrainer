@@ -41,15 +41,21 @@ test("searchDatasets() findet 'Olpe' und 'Oberasbach' ohne Nominatim/Overpass", 
 
     // 1. Olpe
     const olpeResults = await provider.searchDatasets("Olpe");
-    assert.equal(olpeResults.length, 1);
-    assert.equal(olpeResults[0].id, "de-nw-olpe");
-    assert.equal(olpeResults[0].name, "Olpe");
-    assert.equal(olpeResults[0].datasetKind, "municipality");
-    assert.equal(olpeResults[0].state, "Nordrhein-Westfalen");
-    assert.equal(olpeResults[0].packageType, "osm");
-    assert.equal(olpeResults[0].streetCount, 461);
-    assert.equal(olpeResults[0].poiCount, 114);
-    assert.equal(olpeResults[0].areaCount, 2);
+    assert.equal(olpeResults.length, 2);
+    const olpeMunicipality = olpeResults.find(result => result.id === "de-nw-olpe");
+    const olpeDistrict = olpeResults.find(result => result.id === "de-nw-kreis-olpe");
+    assert.ok(olpeMunicipality, "Gemeinde Olpe ist als eigener Datensatz auffindbar");
+    assert.ok(olpeDistrict, "Kreis Olpe ist als eigener Datensatz auffindbar");
+    assert.equal(olpeMunicipality.name, "Olpe");
+    assert.equal(olpeMunicipality.datasetKind, "municipality");
+    assert.equal(olpeMunicipality.state, "Nordrhein-Westfalen");
+    assert.equal(olpeMunicipality.packageType, "osm");
+    assert.equal(olpeMunicipality.streetCount, 461);
+    assert.equal(olpeMunicipality.poiCount, 114);
+    assert.equal(olpeMunicipality.areaCount, 2);
+    assert.equal(olpeDistrict.name, "Kreis Olpe");
+    assert.equal(olpeDistrict.datasetKind, "district");
+    assert.equal(olpeDistrict.areaCount, 7);
 
     // 2. Oberasbach
     const oberasbachResults = await provider.searchDatasets("Oberasbach");
@@ -64,8 +70,11 @@ test("searchDatasets() findet 'Olpe' und 'Oberasbach' ohne Nominatim/Overpass", 
 
     // 3. Case-Insensitive Suche
     const lowerResults = await provider.searchDatasets("olpe");
-    assert.equal(lowerResults.length, 1);
-    assert.equal(lowerResults[0].id, "de-nw-olpe");
+    assert.equal(lowerResults.length, 2);
+    assert.deepEqual(
+      lowerResults.map(result => result.id).sort(),
+      ["de-nw-kreis-olpe", "de-nw-olpe"]
+    );
 
     const upperResults = await provider.searchDatasets("OBERASBACH");
     assert.equal(upperResults.length, 1);
@@ -73,8 +82,9 @@ test("searchDatasets() findet 'Olpe' und 'Oberasbach' ohne Nominatim/Overpass", 
 
     // 4. Suche nach Bundesland
     const nrwResults = await provider.searchDatasets("Nordrhein-Westfalen");
-    assert.equal(nrwResults.length, 4);
+    assert.equal(nrwResults.length, 5);
     assert.ok(nrwResults.some(r => r.id === "de-nw-olpe"));
+    assert.ok(nrwResults.some(r => r.id === "de-nw-kreis-olpe"));
 
     // 5. Unbekannte Suche liefert leeres Array
     const unknownResults = await provider.searchDatasets("NichtImKatalogStadt");
@@ -263,4 +273,3 @@ test("Katalog mit doppelter ID wird abgelehnt", async () => {
   }
   console.log(`\n${passed}/${tests.length} Catalog-Dataset-Provider-Tests bestanden.`);
 })();
-

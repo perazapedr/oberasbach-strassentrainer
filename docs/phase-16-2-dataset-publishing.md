@@ -22,10 +22,11 @@ dist/dataset-repository/
 ├── catalog.json                                # Globaler Katalog aller verfügbaren Datensätze (Schema 1)
 └── datasets/
     ├── de-oberasbach-fire-training/            # Golden Master Oberasbach (Curated)
-    │   ├── package.json                        # Vollständiges Datenpaket (573 KB raw)
-    │   ├── package.json.gz                     # Precompressed Gzip L9 (57,5 KB, -90,0 %)
-    │   ├── package.json.br                     # Precompressed Brotli Q11 (41,6 KB, -92,7 %)
-    │   └── manifest.json                       # Metadaten, SHA-256 Hashes, Dateigrößen
+    │   └── <version>/<artifact-sha256>/       # Immutable, alte Versionen bleiben erhalten
+    │       ├── package.json                    # Vollständiges Datenpaket (573 KB raw)
+    │       ├── package.json.gz                 # Precompressed Gzip L9 (57,5 KB, -90,0 %)
+    │       ├── package.json.br                 # Precompressed Brotli Q11 (41,6 KB, -92,7 %)
+    │       └── manifest.json                   # Metadaten, SHA-256 Hashes, Dateigrößen
     ├── de-by-zirndorf/                         # Zirndorf (OSM PBF)
     │   ├── package.json                        # 911 KB raw
     │   ├── package.json.gz                     # 95,5 KB (-89,5 %)
@@ -86,13 +87,20 @@ node tools/dataset-publisher/index.js
    - Vorhandene Repositories werden gesichert.
    - Der Verzeichnistausch erfolgt atomar (`fs.renameSync`).
    - Bei unvorhergesehenen I/O-Fehlern wird das vorherige Repository nahtlos wiederhergestellt.
+   - Bestehende versionierte Artefakte werden vor der Promotion in das Staging übernommen; der Katalog zeigt nur auf den aktuellen Stand.
 
-3. **Path-Traversal-Schutz**:
+3. **Determinismus und immutable URLs**:
+   - `package.id` ist die einzige Dataset-ID; Dateinamen werden nie als Ersatz-ID verwendet.
+   - Package-URLs enthalten Version und SHA-256 der kanonischen Bytes.
+   - Katalog- und Manifest-Zeitstempel werden deterministisch aus den Package-Metadaten abgeleitet, nicht aus der Wall Clock.
+   - Doppelte `package.id` und URL-Kollisionen mit abweichenden Bytes brechen den Publish-Vorgang ab.
+
+4. **Path-Traversal-Schutz**:
    - Dataset-IDs müssen strikt `^[a-z0-9][a-z0-9-_.]*$` entsprechen.
    - Relative Pfade werden mit `path.relative` gegen das Basisverzeichnis geprüft; Ausbrüche (`..`, absolute Pfade) werden hart abgewiesen.
 
-4. **Golden Master Schutz**:
-   - Oberasbach (`de-oberasbach-fire-training` / `oberasbach`) bleibt deterministisch an Position 0 im Katalog.
+5. **Golden Master Schutz**:
+   - Oberasbach (`de-oberasbach-fire-training`) bleibt deterministisch an Position 0 im Katalog.
    - 271 Straßen, 60 POIs, 0 Areas, unveränderter Hash `sha256:1a085434...`.
 
 ---

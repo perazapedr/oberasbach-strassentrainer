@@ -11,10 +11,12 @@ Das generierte Verzeichnis `dist/dataset-repository/` ist **vollständig statisc
 ### Dateistruktur
 
 - `catalog.json`: Einstiegspunkt für den Client. Ändert sich bei Veröffentlichung neuer Versionen.
-- `datasets/<id>/package.json`: Vollständiges Stadtpaket (unveränderlich pro Version).
-- `datasets/<id>/manifest.json`: Metadaten und Prüfsummen.
-- `datasets/<id>/package.json.gz`: Vorkomprimierte Gzip-Version (Level 9).
-- `datasets/<id>/package.json.br`: Vorkomprimierte Brotli-Version (Quality 11).
+- `datasets/<id>/<version>/<artifact-sha256>/package.json`: Vollständiges, unveränderliches Dataset-Paket.
+- `datasets/<id>/<version>/<artifact-sha256>/manifest.json`: Metadaten und Prüfsummen.
+- `datasets/<id>/<version>/<artifact-sha256>/package.json.gz`: Vorkomprimierte Gzip-Version (Level 9).
+- `datasets/<id>/<version>/<artifact-sha256>/package.json.br`: Vorkomprimierte Brotli-Version (Quality 11).
+
+Der Katalog verweist immer auf den aktuellen Pfad. Der SHA-256 der kanonischen Package-Bytes ist Bestandteil des Pfads; dadurch gilt `same URL -> same bytes`. Beim erneuten Publishing werden vorhandene immutable Artefakte in das neue Staging übernommen und nicht gelöscht. Eventuell vorhandene historische Legacy-Pfade ohne Version/Hash dürfen nicht mit `immutable` ausgeliefert werden.
 
 ---
 
@@ -25,8 +27,8 @@ Für optimale Performance und deterministisches Caching sollten Webserver folgen
 | Ressource | `Cache-Control` | `Content-Type` | Erläuterung |
 | :--- | :--- | :--- | :--- |
 | `catalog.json` | `public, max-age=300, stale-while-revalidate=3600` | `application/json; charset=utf-8` | Regelmäßig neu validieren (5 Minuten Cache), damit neue Versionen rasch erkannt werden |
-| `datasets/<id>/package.json` | `public, max-age=31536000, immutable` | `application/json; charset=utf-8` | Da Versionen im Pfad bzw. per contentHash fixiert sind, ist das Paket unveränderlich |
-| `datasets/<id>/manifest.json` | `public, max-age=31536000, immutable` | `application/json; charset=utf-8` | Unveränderlich pro Paketversion |
+| `datasets/<id>/<version>/<hash>/package.json` | `public, max-age=31536000, immutable` | `application/json; charset=utf-8` | Version und Hash fixieren die Package-Bytes im Pfad |
+| `datasets/<id>/<version>/<hash>/manifest.json` | `public, max-age=31536000, immutable` | `application/json; charset=utf-8` | Unveränderlich pro Package-Artefakt |
 
 ### CORS-Header (Cross-Origin Resource Sharing)
 

@@ -33,8 +33,10 @@ function allIssues(result, kind = "errors") {
 
     // 2. Suche "Olpe" ohne externe APIs
     const olpeCandidates = await provider.searchDatasets("Olpe");
-    assert.equal(olpeCandidates.length, 1);
-    const olpeCandidate = olpeCandidates[0];
+    assert.equal(olpeCandidates.length, 2);
+    const olpeCandidate = olpeCandidates.find(candidate => candidate.id === "de-nw-olpe");
+    assert.ok(olpeCandidate, "Die bestehende Municipality Olpe bleibt neben dem District auswählbar");
+    assert.ok(olpeCandidates.some(candidate => candidate.id === "de-nw-kreis-olpe"));
     assert.equal(olpeCandidate.id, "de-nw-olpe");
     assert.equal(olpeCandidate.name, "Olpe");
     assert.equal(olpeCandidate.datasetKind, "municipality");
@@ -104,4 +106,3 @@ function allIssues(result, kind = "errors") {
   console.error(error);
   process.exit(1);
 });
-

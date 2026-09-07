@@ -232,6 +232,8 @@
 
   function municipalityContext(municipality, includeCountryFallback = false) {
     const parts = [];
+    const datasetKind = asText(municipality && (municipality.datasetKind || municipality.package?.datasetKind));
+    if (datasetKind === "district") parts.push("Typ Landkreis");
     const district = asText(municipality && municipality.district);
     const state = asText(municipality && municipality.state);
     if (district) parts.push(district);
