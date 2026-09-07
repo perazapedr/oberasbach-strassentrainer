@@ -1,0 +1,74 @@
+{
+  "schemaVersion": 1,
+  "datasetId": "de-nw-kreis-olpe",
+  "baseDatasetId": "de-nw-kreis-olpe",
+  "baseVersion": "2026.09.07",
+  "baseContentHash": "sha256:1c076dc3988e06c6019b982a6521196b83830d2b7ab0b110f438aa1352be7455",
+  "curatedVersion": "1.0.0",
+  "curatedAt": "2026-09-07T00:00:00.000Z",
+  "title": "Kreis Olpe – SYNTHETIC TEST Curated Fire Package",
+  "sourceLabel": "SYNTHETIC TEST DATA – not for production catalog",
+  "changes": [
+    {
+      "op": "street.rename",
+      "streetId": "osm-relation-1891506:osm-relation-160880:street-abt-luke-strasse-1b2o3ss",
+      "name": "SYNTHETIC Umbenannte Teststraße"
+    },
+    {
+      "op": "street.alias.add",
+      "streetId": "osm-relation-1891506:osm-relation-160880:street-abt-maurus-kaufmann-weg-1yfiyx6",
+      "alias": "SYNTHETIC Feuerwehr-Alias"
+    },
+    {
+      "op": "street.disable",
+      "streetId": "osm-relation-1891506:osm-relation-160880:street-adenauerstrasse-1ltltqd"
+    },
+    {
+      "op": "poi.add",
+      "value": {
+        "id": "curated-synthetic-poi-added",
+        "name": "SYNTHETIC Added POI",
+        "category": "public_building",
+        "position": { "lat": 51.03, "lon": 7.842 },
+        "geometry": null,
+        "source": "synthetic-curation"
+      }
+    },
+    {
+      "op": "poi.edit",
+      "poiId": "osm-relation-1891506:poi:node-262442795",
+      "patch": { "name": "SYNTHETIC Edited Hotel" }
+    },
+    {
+      "op": "poi.remove",
+      "poiId": "osm-relation-1891506:poi:node-269751037"
+    },
+    {
+      "op": "poi.category",
+      "poiId": "osm-relation-1891506:poi:node-269751040",
+      "category": "public_building"
+    },
+    {
+      "op": "area.response.add",
+      "value": {
+        "id": "curated-response-synthetic-olpe",
+        "name": "SYNTHETIC Curated Response Area",
+        "parentId": "osm-relation-163179",
+        "geometry": {
+          "type": "Polygon",
+          "coordinates": [[
+            [7.835, 51.025],
+            [7.850, 51.025],
+            [7.850, 51.038],
+            [7.835, 51.038],
+            [7.835, 51.025]
+          ]]
+        },
+        "provenance": {
+          "source": "curation",
+          "label": "SYNTHETIC TEST DATA"
+        }
+      }
+    }
+  ]
+}

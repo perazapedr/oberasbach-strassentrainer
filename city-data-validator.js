@@ -767,6 +767,18 @@
     if (cityId && area.cityId !== cityId) {
       return issue("AREA_CITY_ID_INVALID", "error", "area", entityId, "Das Gebiet verweist nicht auf die importierte Stadt.");
     }
+    if (area.datasetId !== undefined && area.datasetId !== area.cityId) {
+      return issue("AREA_DATASET_ID_INVALID", "error", "area", entityId, "Das Gebiet verweist auf ein anderes Dataset.");
+    }
+    if (area.kind !== undefined && !["administrative", "response_area", "custom"].includes(area.kind)) {
+      return issue("AREA_KIND_INVALID", "error", "area", entityId, "Der Gebietstyp ist ungültig.");
+    }
+    if (area.source !== undefined && !["osm", "curated", "user"].includes(area.source)) {
+      return issue("AREA_SOURCE_INVALID", "error", "area", entityId, "Die Gebietsquelle ist ungültig.");
+    }
+    if (area.kind === "response_area" && !["curated", "user"].includes(area.source)) {
+      return issue("AREA_SOURCE_INVALID", "error", "area", entityId, "Ein Response Area benötigt eine lokale oder kuratierte Quelle.");
+    }
     if (!trimmedString(area.name)) {
       return issue("AREA_NAME_MISSING", "error", "area", entityId, "Der Gebietsname fehlt.");
     }
@@ -1134,6 +1146,8 @@
           type: street.geometry.type,
           coordinates: street.geometry.coordinates
         } : null,
+        ...(street.active === false ? { active: false } : {}),
+        ...(street.quizEligible === false ? { quizEligible: false } : {}),
         ...(districtDataset ? {
           displayName: String(street.displayName || street.name || "").trim(),
           municipalityId: String(street.municipalityId || "").trim(),
@@ -1180,6 +1194,12 @@
           type: area.boundary.type,
           coordinates: area.boundary.coordinates
         } : null),
+        ...(area.kind === "response_area" ? {
+          kind: "response_area",
+          source: String(area.source || "").trim(),
+          datasetId: String(area.datasetId || area.cityId || "").trim(),
+          areaType: String(area.areaType || "fire_response").trim()
+        } : {}),
         ...(districtDataset ? {
           areaType: String(area.areaType || "").trim(),
           official: Boolean(area.official),

@@ -329,6 +329,13 @@
           "id": { "type": "string", "minLength": 1 },
           "cityId": { "type": "string", "minLength": 1 },
           "name": { "type": "string", "minLength": 1 },
+          "datasetId": { "type": "string", "minLength": 1 },
+          "kind": { "type": "string", "enum": ["administrative", "response_area", "custom"] },
+          "source": { "type": "string", "enum": ["osm", "curated", "user"] },
+          "areaType": { "type": "string" },
+          "local": { "type": "boolean" },
+          "curated": { "type": "boolean" },
+          "provenance": { "type": "object" },
           "parentId": { "type": ["string", "null"] },
           "tier": { "type": ["integer", "null"] },
           "adminLevel": { "type": ["integer", "null"] },
@@ -396,4 +403,3 @@
   },
   "additionalProperties": true
 }
-

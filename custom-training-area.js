@@ -20,6 +20,9 @@
     CUSTOM: "custom"
   });
   const USER_AREA_NAME_MAX_LENGTH = 80;
+  const COORDINATE_EPSILON = 1e-12;
+  const CONTAINMENT_ABSOLUTE_TOLERANCE_SQUARE_METERS = 0.05;
+  const CONTAINMENT_RELATIVE_TOLERANCE = 1e-10;
   const membershipCache = new Map();
 
   function clone(value) {
@@ -40,6 +43,14 @@
   function isUserArea(area) {
     return Boolean(area) && areaSource(area) === "user"
       && [AREA_KINDS.RESPONSE, AREA_KINDS.CUSTOM].includes(areaKind(area));
+  }
+
+  function isResponseArea(area) {
+    return Boolean(area) && areaKind(area) === AREA_KINDS.RESPONSE;
+  }
+
+  function isCuratedArea(area) {
+    return isResponseArea(area) && areaSource(area) === "curated";
   }
 
   function normalizeName(value) {
@@ -70,38 +81,94 @@
     return `user-area-${token || Date.now().toString(36)}`;
   }
 
-  function equalCoordinate(first, second) {
+  function equalCoordinate(first, second, epsilon = COORDINATE_EPSILON) {
     return Array.isArray(first) && Array.isArray(second)
-      && Number(first[0]) === Number(second[0]) && Number(first[1]) === Number(second[1]);
+      && Math.abs(Number(first[0]) - Number(second[0])) <= epsilon
+      && Math.abs(Number(first[1]) - Number(second[1])) <= epsilon;
   }
 
-  function normalizePolygon(points) {
-    const source = Array.isArray(points) ? points : [];
+  function geometryError(code, message) {
+    return Object.assign(new Error(message), { code });
+  }
+
+  function normalizeRing(points) {
+    if (!Array.isArray(points) || points.length === 0) {
+      throw geometryError("POLYGON_EMPTY", "Das Polygon enthält keinen gültigen Ring.");
+    }
     const ring = [];
-    for (const point of source) {
+    for (const point of points) {
+      if (!Array.isArray(point) && (!point || typeof point !== "object")) {
+        throw geometryError("POLYGON_COORDINATE_INVALID", "Das Polygon enthält eine ungültige Koordinate.");
+      }
       const lon = Number(Array.isArray(point) ? point[0] : point && (point.lng ?? point.lon));
       const lat = Number(Array.isArray(point) ? point[1] : point && point.lat);
-      if (!Number.isFinite(lon) || !Number.isFinite(lat)) continue;
+      if (!Number.isFinite(lon) || !Number.isFinite(lat)
+        || lon < -180 || lon > 180 || lat < -90 || lat > 90) {
+        throw geometryError("POLYGON_COORDINATE_INVALID", "Das Polygon enthält eine ungültige oder nicht endliche Koordinate.");
+      }
       const coordinate = [lon, lat];
       if (!equalCoordinate(ring[ring.length - 1], coordinate)) ring.push(coordinate);
     }
     if (ring.length > 1 && equalCoordinate(ring[0], ring[ring.length - 1])) ring.pop();
-    if (new Set(ring.map(point => `${point[0]},${point[1]}`)).size < 3) {
-      throw Object.assign(new Error("Ein Polygon benötigt mindestens drei unterschiedliche Punkte."), { code: "POLYGON_TOO_SMALL" });
+    const distinct = [];
+    for (const coordinate of ring) {
+      if (!distinct.some(existing => equalCoordinate(existing, coordinate))) distinct.push(coordinate);
+    }
+    if (distinct.length < 3) {
+      throw geometryError("POLYGON_TOO_SMALL", "Ein Polygon benötigt mindestens drei unterschiedliche Punkte.");
     }
     ring.push([...ring[0]]);
-    const polygon = { type: "Polygon", coordinates: [ring] };
+    return ring;
+  }
+
+  function validateCanonicalGeometry(geometry) {
     try {
-      const feature = turfApi.polygon(polygon.coordinates);
-      if (typeof turfApi.kinks === "function" && turfApi.kinks(feature).features.length > 0) {
-        throw Object.assign(new Error("Das Polygon darf sich nicht selbst überschneiden."), { code: "POLYGON_SELF_INTERSECTION" });
+      const polygons = geometry.type === "Polygon" ? [geometry.coordinates] : geometry.coordinates;
+      for (const polygon of polygons) {
+        for (const ring of polygon) {
+          const ringFeature = turfApi.polygon([ring]);
+          if (typeof turfApi.kinks === "function" && turfApi.kinks(ringFeature).features.length > 0) {
+            throw geometryError("POLYGON_SELF_INTERSECTION", "Das Polygon darf sich nicht selbst überschneiden.");
+          }
+          if (Number(turfApi.area(ringFeature)) <= 0) {
+            throw geometryError("POLYGON_INVALID", "Das Polygon besitzt keine gültige Fläche.");
+          }
+        }
       }
+      const feature = turfApi.feature(geometry);
       if (Number(turfApi.area(feature)) <= 0) throw new Error("Das Polygon besitzt keine gültige Fläche.");
     } catch (error) {
       if (error && error.code) throw error;
-      throw Object.assign(new Error("Das gezeichnete Polygon ist ungültig."), { code: "POLYGON_INVALID" });
+      throw geometryError("POLYGON_INVALID", "Das gezeichnete Polygon ist ungültig.");
     }
-    return polygon;
+    return geometry;
+  }
+
+  function canonicalizeAreaGeometry(input) {
+    const candidate = input?.type === "Feature" ? input.geometry : input;
+    if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) {
+      throw geometryError("GEOMETRY_REQUIRED", "Eine Polygon-Geometrie ist erforderlich.");
+    }
+    if (!["Polygon", "MultiPolygon"].includes(candidate.type)) {
+      throw geometryError("GEOMETRY_TYPE_INVALID", "Nur Polygon und MultiPolygon werden als Trainingsgebiet unterstützt.");
+    }
+    if (!Array.isArray(candidate.coordinates) || candidate.coordinates.length === 0) {
+      throw geometryError("POLYGON_EMPTY", "Die Polygon-Geometrie ist leer.");
+    }
+    const normalizePolygonCoordinates = polygon => {
+      if (!Array.isArray(polygon) || polygon.length === 0) {
+        throw geometryError("POLYGON_EMPTY", "Die Polygon-Geometrie enthält kein gültiges Polygon.");
+      }
+      return polygon.map(normalizeRing);
+    };
+    const geometry = candidate.type === "Polygon"
+      ? { type: "Polygon", coordinates: normalizePolygonCoordinates(candidate.coordinates) }
+      : { type: "MultiPolygon", coordinates: candidate.coordinates.map(normalizePolygonCoordinates) };
+    return validateCanonicalGeometry(geometry);
+  }
+
+  function normalizePolygon(points) {
+    return canonicalizeAreaGeometry({ type: "Polygon", coordinates: [points] });
   }
 
   function leafletLatLngToGeoJsonCoordinate(latlng) {
@@ -117,13 +184,58 @@
       && Array.isArray(geometry.coordinates);
   }
 
-  function isContainedInCity(boundary, cityBoundary) {
-    if (!isAreaGeometry(boundary) || !isAreaGeometry(cityBoundary)) return false;
+  function boundaryRings(geometry) {
+    const polygons = geometry.type === "Polygon" ? [geometry.coordinates] : geometry.coordinates;
+    return polygons.flatMap(polygon => polygon);
+  }
+
+  function geometryTouchesBoundary(geometry, container) {
     try {
-      return Boolean(turfApi.booleanWithin(turfApi.feature(boundary), turfApi.feature(cityBoundary)));
+      const containerLines = boundaryRings(container).map(ring => turfApi.lineString(ring));
+      const polygons = geometry.type === "Polygon" ? [geometry.coordinates] : geometry.coordinates;
+      return polygons.some(polygon => polygon.some(ring => ring.some(coordinate =>
+        containerLines.some(line => turfApi.booleanPointOnLine(turfApi.point(coordinate), line))
+      )));
     } catch (_) {
       return false;
     }
+  }
+
+  function classifyAreaContainment(boundary, cityBoundary) {
+    if (!isAreaGeometry(boundary) || !isAreaGeometry(cityBoundary)) {
+      return { accepted: false, status: "invalid", outsideAreaSquareMeters: null, toleranceSquareMeters: null };
+    }
+    try {
+      const areaFeature = turfApi.feature(boundary);
+      const cityFeature = turfApi.feature(cityBoundary);
+      const totalArea = Number(turfApi.area(areaFeature));
+      const tolerance = Math.max(CONTAINMENT_ABSOLUTE_TOLERANCE_SQUARE_METERS, totalArea * CONTAINMENT_RELATIVE_TOLERANCE);
+      const outside = turfApi.difference(turfApi.featureCollection([areaFeature, cityFeature]));
+      const outsideArea = outside ? Number(turfApi.area(outside)) : 0;
+      if (Number.isFinite(outsideArea) && outsideArea <= tolerance) {
+        return {
+          accepted: true,
+          status: geometryTouchesBoundary(boundary, cityBoundary) ? "boundary_touch" : "inside",
+          outsideAreaSquareMeters: outsideArea,
+          toleranceSquareMeters: tolerance
+        };
+      }
+      const disjoint = typeof turfApi.booleanDisjoint === "function"
+        ? turfApi.booleanDisjoint(areaFeature, cityFeature)
+        : !turfApi.booleanIntersects(areaFeature, cityFeature);
+      return {
+        accepted: false,
+        status: disjoint ? "outside" : "partial",
+        outsideAreaSquareMeters: Number.isFinite(outsideArea) ? outsideArea : null,
+        toleranceSquareMeters: tolerance
+      };
+    } catch (_) {
+      return { accepted: false, status: "invalid", outsideAreaSquareMeters: null, toleranceSquareMeters: null };
+    }
+  }
+
+  function isContainedInCity(boundary, cityBoundary) {
+    return classifyAreaContainment(boundary, cityBoundary).accepted;
   }
 
   function geometryBounds(geometry) {
@@ -145,24 +257,38 @@
     }
     const nameResult = validateName(options.name, options.existingAreas);
     if (!nameResult.valid) throw Object.assign(new Error(nameResult.message), { code: nameResult.code });
-    const boundary = normalizePolygon(options.points || options.boundary?.coordinates?.[0]);
+    const boundary = options.geometry || options.boundary
+      ? canonicalizeAreaGeometry(options.geometry || options.boundary)
+      : normalizePolygon(options.points);
     if (!isAreaGeometry(options.cityBoundary)) {
       throw Object.assign(new Error(
         "Die installierte Stadtgrenze ist nicht verfügbar. Bitte lade das Stadtpaket neu, bevor du ein Trainingsgebiet speicherst."
       ), { code: "CITY_BOUNDARY_REQUIRED" });
     }
-    if (!isContainedInCity(boundary, options.cityBoundary)) {
+    const containment = classifyAreaContainment(boundary, options.cityBoundary);
+    if (!containment.accepted) {
       throw Object.assign(new Error(
-        "Das Trainingsgebiet reicht außerhalb des installierten Stadtgebiets. Für gemeindeübergreifende Gebiete ist später ein größerer Datensatz erforderlich."
-      ), { code: "AREA_OUTSIDE_CITY" });
+        "Das Trainingsgebiet reicht außerhalb der installierten Dataset-Grenze."
+      ), { code: "AREA_OUTSIDE_CITY", containmentStatus: containment.status });
     }
     const now = options.now || new Date().toISOString();
+    const source = options.source === "curated" ? "curated" : "user";
+    const requestedId = String(options.id || "").trim();
+    if (source === "curated" && !requestedId) {
+      throw geometryError("AREA_ID_REQUIRED", "Ein kuratiertes Einsatzgebiet benötigt eine stabile ID.");
+    }
     return {
-      id: createUserAreaId(options.uuidFactory),
+      id: requestedId || createUserAreaId(options.uuidFactory),
       cityId,
+      datasetId: cityId,
       name: nameResult.name,
       kind,
-      source: "user",
+      areaType: kind === AREA_KINDS.RESPONSE ? "fire_response" : "custom",
+      source,
+      provenance: clone(options.provenance || { source: source === "curated" ? "curation" : "local" }),
+      local: source === "user",
+      curated: source === "curated",
+      parentId: options.parentId ? String(options.parentId).trim() : null,
       boundary,
       bounds: geometryBounds(boundary),
       center: geometryCenter(boundary),
@@ -170,6 +296,50 @@
       createdAt: now,
       updatedAt: now
     };
+  }
+
+  function stableImportId(datasetId, geometry, suppliedId) {
+    const normalized = String(suppliedId || "").trim();
+    if (normalized) return normalized.startsWith("user-area-") ? normalized : `user-area-import-${normalized.replace(/[^a-zA-Z0-9-]/g, "-")}`;
+    const text = `${datasetId}:${JSON.stringify(geometry)}`;
+    let hash = 2166136261;
+    for (let index = 0; index < text.length; index += 1) {
+      hash ^= text.charCodeAt(index);
+      hash = Math.imul(hash, 16777619);
+    }
+    return `user-area-import-${(hash >>> 0).toString(16).padStart(8, "0")}`;
+  }
+
+  function importResponseArea(payload, options = {}) {
+    if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+      throw geometryError("AREA_IMPORT_INVALID", "Die Gebietsdatei enthält kein gültiges Objekt.");
+    }
+    if (payload.type === "FeatureCollection") {
+      if (!Array.isArray(payload.features) || payload.features.length !== 1) {
+        throw geometryError("AREA_IMPORT_NOT_ATOMIC", "Eine Gebietsdatei muss genau ein Polygon enthalten.");
+      }
+      payload = payload.features[0];
+    }
+    const properties = payload.type === "Feature" ? (payload.properties || {}) : payload;
+    const geometry = canonicalizeAreaGeometry(payload.type === "Feature"
+      ? payload.geometry
+      : (payload.geometry || payload.boundary || payload));
+    const datasetId = String(options.datasetId || options.cityId || "").trim();
+    const payloadDatasetId = String(properties.datasetId || properties.cityId || "").trim();
+    if (payloadDatasetId && payloadDatasetId !== datasetId) {
+      throw geometryError("AREA_DATASET_MISMATCH", "Das Einsatzgebiet gehört zu einem anderen Dataset.");
+    }
+    return createArea({
+      ...options,
+      cityId: datasetId,
+      id: stableImportId(datasetId, geometry, properties.id),
+      name: options.name || properties.name,
+      kind: AREA_KINDS.RESPONSE,
+      geometry,
+      source: "user",
+      parentId: options.parentId || properties.parentId,
+      provenance: { source: "import", label: String(properties.sourceLabel || properties.source || "GeoJSON import").slice(0, 120) }
+    });
   }
 
   function normalizedStreetGeometry(street) {
@@ -207,7 +377,7 @@
   }
 
   function computeMembership(cityId, area, streets, pois, options = {}) {
-    if (!area || area.invalid || !isUserArea(area)) {
+    if (!area || area.invalid || (!isUserArea(area) && !isCuratedArea(area))) {
       return { streetIds: new Set(), poiIds: new Set(), streetTargets: [], poiTargets: [], diagnostics: { streetCandidates: 0, poiCandidates: 0 } };
     }
     const key = cacheKey(cityId, area.id);
@@ -321,13 +491,18 @@
     areaKind,
     areaSource,
     isUserArea,
+    isResponseArea,
+    isCuratedArea,
     validateName,
     createUserAreaId,
     normalizePolygon,
+    canonicalizeAreaGeometry,
     leafletLatLngToGeoJsonCoordinate,
     isAreaGeometry,
     isContainedInCity,
+    classifyAreaContainment,
     createArea,
+    importResponseArea,
     computeMembership,
     invalidateMembership,
     revalidateUserAreas,

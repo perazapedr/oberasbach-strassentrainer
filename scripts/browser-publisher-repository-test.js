@@ -10,11 +10,23 @@ const ROOT = path.resolve(__dirname, "..");
 const CHROME_BIN = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
 const PORT = 8095;
 
-function startStaticServer() {
+function startStaticServer(options = {}) {
   return new Promise((resolve) => {
     const server = http.createServer((req, res) => {
       const urlPath = decodeURIComponent(req.url.split("?")[0]);
       let filePath = path.join(ROOT, urlPath === "/" ? "index.html" : urlPath);
+
+      if (options.curatedRepoDir) {
+        if (urlPath === "/curated-repo/catalog.json") {
+          const payload = req.url.includes("update_curated=1") ? options.cat2Json : options.cat1Json;
+          res.writeHead(200, { "Content-Type": "application/json; charset=utf-8", "Access-Control-Allow-Origin": "*" });
+          res.end(payload);
+          return;
+        }
+        if (urlPath.startsWith("/curated-repo/")) {
+          filePath = path.join(options.curatedRepoDir, urlPath.slice("/curated-repo/".length));
+        }
+      }
 
       // Die Anwendung verwendet weiterhin ihren normalen CatalogDatasetProvider
       // unter data/catalog.json. Im Repository-E2E wird dort bewusst das echte,
@@ -181,13 +193,49 @@ class CdpConnection {
 
 async function runBrowserPublishingRepositoryTest() {
   const phase17Only = process.argv.includes("--phase17-only");
+  const phase172Only = process.argv.includes("--phase17-2-only");
+  const phase173Only = process.argv.includes("--phase17-3-only");
+  const phase18Only = process.argv.includes("--phase18-only");
   console.log("=== Phase 16.2 Headless Chrome CDP Repository Test ===");
-  const server = await startStaticServer();
+
+  const composer = require("../tools/dataset-curation");
+  const publisher = require("../tools/dataset-publisher");
+  const baseData = JSON.parse(fs.readFileSync(path.join(ROOT, "data/cities/de-nw-kreis-olpe.json"), "utf8"));
+  const overlayV1 = JSON.parse(fs.readFileSync(path.join(ROOT, "tests/fixtures/curation/kreis-olpe-synthetic-overlay.json"), "utf8"));
+
+  const curatedTemp = fs.mkdtempSync(path.join(require("node:os").tmpdir(), "curated-repo-test-"));
+  const curatedSource = path.join(curatedTemp, "source");
+  const curatedRepoDir = path.join(curatedTemp, "repo");
+  fs.mkdirSync(curatedSource, { recursive: true });
+
+  const comp1 = composer.composeCuratedPackage(baseData, overlayV1);
+  fs.writeFileSync(path.join(curatedSource, "curated.json"), JSON.stringify(comp1.packageData, null, 2));
+  await publisher.publishRepository({ sourceDir: curatedSource, outputDir: curatedRepoDir, precompress: false });
+  const cat1 = JSON.parse(fs.readFileSync(path.join(curatedRepoDir, "catalog.json"), "utf8"));
+
+  const overlayV2 = JSON.parse(JSON.stringify(overlayV1));
+  overlayV2.curatedVersion = "1.1.0";
+  overlayV2.changes.push({
+    op: "street.rename",
+    streetId: "osm-relation-1891506:osm-relation-160880:street-abt-maurus-kaufmann-weg-1yfiyx6",
+    name: "SYNTHETIC V2 Maurus Weg"
+  });
+  const comp2 = composer.composeCuratedPackage(baseData, overlayV2);
+  fs.writeFileSync(path.join(curatedSource, "curated.json"), JSON.stringify(comp2.packageData, null, 2));
+  await publisher.publishRepository({ sourceDir: curatedSource, outputDir: curatedRepoDir, precompress: false });
+  const cat2 = JSON.parse(fs.readFileSync(path.join(curatedRepoDir, "catalog.json"), "utf8"));
+
+  const server = await startStaticServer({
+    curatedRepoDir,
+    cat1Json: JSON.stringify(cat1, null, 2),
+    cat2Json: JSON.stringify(cat2, null, 2)
+  });
   console.log(`Static server running on http://127.0.0.1:${PORT}`);
 
   const userDataDir = fs.mkdtempSync(path.join(require("node:os").tmpdir(), "cdp-repo-test-"));
   const chromeProc = spawn(CHROME_BIN, [
     "--headless=new",
+    "--window-size=1280,1024",
     "--remote-debugging-port=9224",
     `--user-data-dir=${userDataDir}`,
     "--no-first-run",
@@ -214,6 +262,12 @@ async function runBrowserPublishingRepositoryTest() {
     await cdp.send("Page.enable");
     await cdp.send("Runtime.enable");
     await cdp.send("Network.enable");
+    await cdp.send("Emulation.setDeviceMetricsOverride", {
+      width: 1440,
+      height: 960,
+      deviceScaleFactor: 1,
+      mobile: false
+    });
 
     cdp.on("Runtime.exceptionThrown", params => {
       console.error("[BROWSER ERROR]", params.exceptionDetails?.exception?.description || params.exceptionDetails?.text || params);
@@ -246,6 +300,330 @@ async function runBrowserPublishingRepositoryTest() {
     console.log(`✓ Katalog erfolgreich geladen: ${catalogCheck.datasetCount} Datensätze: [${catalogCheck.datasetIds.join(", ")}]`);
     if (catalogCheck.schemaVersion !== 1 || catalogCheck.datasetCount < 5 || !catalogCheck.immutablePaths) {
       throw new Error("Katalogstruktur ungültig.");
+    }
+
+    async function playCurrentRound(label) {
+      const prepared = await cdp.eval(`(async () => {
+        document.getElementById("mainButton").click();
+        const deadline = performance.now() + 5000;
+        while (performance.now() < deadline) {
+          const state = window.STRASSENTRAINER_DEBUG.getGameState();
+          if (state.status === "active" && state.currentRound?.target?.geometry) {
+            const map = document.getElementById("map");
+            map.scrollIntoView({ block: "center", inline: "center" });
+            await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+            const rect = map.getBoundingClientRect();
+            return {
+              question: document.getElementById("targetStreet").textContent.trim(),
+              targetId: state.currentRound.target.id,
+              geometryValid: window.StrassentrainerTargets.isValidTargetGeometry(state.currentRound.target, window.StreetGeometry),
+              x: rect.left + rect.width / 2, y: rect.top + rect.height / 2
+            };
+          }
+          await new Promise(resolve => setTimeout(resolve, 25));
+        }
+        throw new Error("Browserrunde wurde nicht aktiv");
+      })()`);
+      if (!prepared.question || !prepared.targetId || !prepared.geometryValid) {
+        throw new Error(`${label}: Frage/Ziel/Geometrie ungültig: ${JSON.stringify(prepared)}`);
+      }
+      await cdp.send("Input.dispatchMouseEvent", { type: "mousePressed", x: prepared.x, y: prepared.y, button: "left", clickCount: 1 });
+      await cdp.send("Input.dispatchMouseEvent", { type: "mouseReleased", x: prepared.x, y: prepared.y, button: "left", clickCount: 1 });
+      const score = await cdp.eval(`(async () => {
+        const deadline = performance.now() + 5000;
+        while (performance.now() < deadline) {
+          const result = window.STRASSENTRAINER_DEBUG.getGameState().currentRound?.result;
+          if (result) return result;
+          await new Promise(resolve => setTimeout(resolve, 25));
+        }
+        throw new Error("Nativer Kartenklick wurde nicht ausgewertet");
+      })()`);
+      if (!Number.isFinite(score.distanceMeters) || !Number.isFinite(score.points)) {
+        throw new Error(`${label}: Distanz/Score ungültig: ${JSON.stringify(score)}`);
+      }
+      console.log(`✓ ${label}: "${prepared.question}", ${score.distanceMeters.toFixed(1)} m, ${score.points} Punkte`);
+      return { prepared, score };
+    }
+
+    async function runPhase18CuratedSuite() {
+      console.log("\n============================================================");
+      console.log("--- Phase 18: Kuratiertes Feuerwehr-Paket (Synthetisches Kreis-Olpe-Fixture) ---");
+      console.log("============================================================");
+
+      // A. Installation von Curated v1 aus dem kuratierten Test-Repository
+      networkRequests.length = 0;
+      const installResult = await cdp.eval(`(async () => {
+        await window.StrassentrainerRuntime.ready;
+        const provider = window.StrassentrainerDatasetProvider.createCatalogDatasetProvider("/curated-repo/catalog.json");
+        const candidates = await provider.searchDatasets("Kreis Olpe");
+        if (!candidates || candidates.length === 0) throw new Error("Katalogsuche nach Kreis Olpe im kuratierten Repo lieferte keine Treffer");
+        const meta = candidates[0];
+        const downloaded = await provider.downloadDataset(meta.id);
+        const val = window.StrassentrainerCityDataValidator;
+        const pCheck = val.validateCityPackage(downloaded.dataset);
+        const cCheck = val.validateCityData(downloaded.dataset);
+        const hCheck = val.verifyPackageHash(downloaded.dataset);
+        if (!pCheck.valid || !cCheck.valid || !hCheck.valid) {
+          throw new Error("Validierung des kuratierten Pakets fehlgeschlagen: " + JSON.stringify({ pCheck, cCheck, hCheck }));
+        }
+        const storage = window.StrassentrainerCityStorage;
+        const cityToSave = {
+          ...downloaded.dataset.city,
+          boundary: downloaded.dataset.city.boundary || downloaded.dataset.boundary,
+          package: downloaded.dataset.package,
+          version: downloaded.dataset.package.version,
+          contentHash: downloaded.dataset.package.contentHash
+        };
+        await storage.saveCity(cityToSave, downloaded.dataset.streets, downloaded.dataset.pois, downloaded.dataset.areas);
+        await window.StrassentrainerRuntime.activateCity(cityToSave.id, { force: true });
+        const active = await storage.getActiveCityData();
+        const targets = window.STRASSENTRAINER_DEBUG.getTargets();
+        const eligibleTargets = typeof window.STRASSENTRAINER_DEBUG.getEligibleTargets === "function"
+          ? window.STRASSENTRAINER_DEBUG.getEligibleTargets("street")
+          : targets.streets.filter(t => t.active && t.quizEligible);
+        const eligibleStreetIds = new Set(eligibleTargets.map(t => t.id));
+
+        return {
+          cityId: active.city.id,
+          cityName: active.city.name,
+          packageType: active.city.package?.type,
+          datasetKind: active.city.datasetKind || active.city.package?.datasetKind,
+          version: active.city.package?.version,
+          contentHash: active.city.package?.contentHash,
+          streetsCount: active.streets.length,
+          poisCount: active.pois.length,
+          areasCount: active.areas.length,
+          hasRenamedStreet: active.streets.some(s => s.name === "SYNTHETIC Umbenannte Teststraße"),
+          aliasStreet: active.streets.find(s => s.id === "osm-relation-1891506:osm-relation-160880:street-abt-maurus-kaufmann-weg-1yfiyx6"),
+          disabledStreet: active.streets.find(s => s.id === "osm-relation-1891506:osm-relation-160880:street-adenauerstrasse-1ltltqd"),
+          disabledStreetInQuiz: eligibleStreetIds.has("osm-relation-1891506:osm-relation-160880:street-adenauerstrasse-1ltltqd"),
+          addedPoi: active.pois.find(p => p.id === "curated-synthetic-poi-added"),
+          editedPoi: active.pois.find(p => p.id === "osm-relation-1891506:poi:node-262442795"),
+          removedPoi: active.pois.find(p => p.id === "osm-relation-1891506:poi:node-269751037"),
+          curatedArea: active.areas.find(a => a.id === "curated-response-synthetic-olpe"),
+          selectorOptions: Array.from(document.getElementById("trainingAreaSelect").options).map(o => ({ value: o.value, text: o.text }))
+        };
+      })()`);
+
+      if (installResult.packageType !== "curated" || installResult.datasetKind !== "district" || installResult.version !== "1.0.0") {
+        throw new Error(`Curated Package Metadaten ungültig: ${JSON.stringify(installResult)}`);
+      }
+      if (!installResult.hasRenamedStreet) throw new Error("Kuratierter Straßenname nicht gefunden");
+      if (!installResult.aliasStreet || !installResult.aliasStreet.aliases?.includes("SYNTHETIC Feuerwehr-Alias")) {
+        throw new Error(`Feuerwehr-Alias fehlt: ${JSON.stringify(installResult.aliasStreet)}`);
+      }
+      if (!installResult.disabledStreet || installResult.disabledStreet.active !== false || installResult.disabledStreet.quizEligible !== false) {
+        throw new Error(`Deaktivierte Straße fehlerhaft: ${JSON.stringify(installResult.disabledStreet)}`);
+      }
+      if (installResult.disabledStreetInQuiz) {
+        throw new Error("Deaktivierte Straße fälschlicherweise in aktiven Quiz-Targets enthalten!");
+      }
+      if (!installResult.addedPoi || installResult.addedPoi.name !== "SYNTHETIC Added POI") {
+        throw new Error(`Hinzugefügter POI fehlt: ${JSON.stringify(installResult.addedPoi)}`);
+      }
+      if (!installResult.editedPoi || installResult.editedPoi.name !== "SYNTHETIC Edited Hotel") {
+        throw new Error(`Editierter POI fehlt: ${JSON.stringify(installResult.editedPoi)}`);
+      }
+      if (installResult.removedPoi) {
+        throw new Error(`Entfernter POI ist noch vorhanden: ${JSON.stringify(installResult.removedPoi)}`);
+      }
+      if (!installResult.curatedArea || installResult.curatedArea.kind !== "response_area" || installResult.curatedArea.source !== "curated") {
+        throw new Error(`Kuratierte Response Area ungültig: ${JSON.stringify(installResult.curatedArea)}`);
+      }
+      const hasOption = installResult.selectorOptions.some(o => o.value === "curated-response-synthetic-olpe");
+      if (!hasOption) {
+        throw new Error(`Kuratierte Response Area nicht im Selector: ${JSON.stringify(installResult.selectorOptions)}`);
+      }
+      console.log(`✓ Curated Feature-Check PASS: Rename, Alias, Disabled-Filter, POI add/edit/remove, Response Area (${installResult.streetsCount} Straßen, ${installResult.poisCount} POIs, ${installResult.areasCount} Areas)`);
+
+      // B. Echte Spielrunde in der kuratierten Response Area
+      await cdp.eval(`window.StrassentrainerRuntime.activateTrainingArea("curated-response-synthetic-olpe", { force: true })`);
+      await playCurrentRound("Curated Response Area Online");
+
+      // C. Offline & Reload
+      await cdp.send("Network.emulateNetworkConditions", { offline: true, latency: 0, downloadThroughput: 0, uploadThroughput: 0 });
+      networkRequests.length = 0;
+      await cdp.send("Page.reload");
+      await new Promise(resolve => setTimeout(resolve, 1200));
+
+      const offlineArea = await cdp.eval(`(async () => {
+        await window.StrassentrainerRuntime.ready;
+        const area = window.StrassentrainerRuntime.getActiveTrainingArea();
+        return area ? { id: area.id, name: area.name, kind: area.kind, source: area.source } : null;
+      })()`);
+      if (offlineArea?.id !== "curated-response-synthetic-olpe") {
+        throw new Error(`Curated Response Area offline nach Reload nicht aktiv: ${JSON.stringify(offlineArea)}`);
+      }
+      await playCurrentRound("Curated Response Area Offline");
+
+      const forbiddenRequests = networkRequests.filter(url => /catalog\.json|\/data\/datasets\/|\/curated-repo\/|nominatim|overpass/i.test(url));
+      if (forbiddenRequests.length) throw new Error(`Offline Curated Runde erzeugte Netzwerkrequests: ${JSON.stringify(forbiddenRequests)}`);
+      console.log("✓ Curated Offline + Reload PASS: 0 Datenrequests, 0 Nominatim/Overpass");
+
+      // D. Netzwerk wiederherstellen
+      await cdp.send("Network.emulateNetworkConditions", { offline: false, latency: 0, downloadThroughput: -1, uploadThroughput: -1 });
+
+      // E. Lokales Benutzergebiet anlegen (um Erhaltung bei Update zu beweisen)
+      await cdp.eval(`(async () => {
+        const storage = window.StrassentrainerCityStorage;
+        const userArea = {
+          id: "user-area-local-fire-district",
+          cityId: "osm-relation-1891506",
+          datasetId: "osm-relation-1891506",
+          name: "SYNTHETIC Lokales Wachgebiet",
+          kind: "response_area",
+          source: "user",
+          local: true,
+          boundary: {
+            type: "Polygon",
+            coordinates: [[[7.836, 51.026], [7.848, 51.026], [7.848, 51.036], [7.836, 51.036], [7.836, 51.026]]]
+          },
+          bounds: { south: 51.026, west: 7.836, north: 51.036, east: 7.848 }
+        };
+        await storage.saveArea(userArea);
+      })()`);
+
+      // F. Curated Update Browser: v1 -> v2
+      console.log("\n--- Curated Update Browser: Synthetic Curated v1 → v2 ---");
+      const updateResult = await cdp.eval(`(async () => {
+        const provider = window.StrassentrainerDatasetProvider.createCatalogDatasetProvider("/curated-repo/catalog.json?update_curated=1");
+        const storage = window.StrassentrainerCityStorage;
+        const activeData = await storage.getActiveCityData();
+        const check = await provider.checkForUpdate(activeData.city);
+        if (!check || !check.hasUpdate) throw new Error("Update auf v2 wurde nicht erkannt: " + JSON.stringify(check));
+
+        const v2Download = await provider.downloadDataset("de-nw-kreis-olpe");
+        const val = window.StrassentrainerCityDataValidator;
+        const hCheck = val.verifyPackageHash(v2Download.dataset);
+        const pCheck = val.validateCityPackage(v2Download.dataset);
+        const cCheck = val.validateCityData(v2Download.dataset);
+        if (!hCheck.valid || !pCheck.valid || !cCheck.valid) {
+          throw new Error("v2 Validierung fehlgeschlagen: " + JSON.stringify({ hCheck, pCheck, cCheck }));
+        }
+
+        const diff = window.StrassentrainerCityUpdate.compareCityVersions(activeData, v2Download.dataset);
+
+        // Atomares Update in IndexedDB
+        const v2City = {
+          ...v2Download.dataset.city,
+          boundary: v2Download.dataset.city.boundary || v2Download.dataset.boundary,
+          package: v2Download.dataset.package,
+          version: v2Download.dataset.package.version,
+          contentHash: v2Download.dataset.package.contentHash
+        };
+        await storage.saveCity(v2City, v2Download.dataset.streets, v2Download.dataset.pois, v2Download.dataset.areas);
+        await window.StrassentrainerRuntime.activateCity(v2City.id, { force: true });
+
+        const after = await storage.getActiveCityData();
+        const areas = await storage.getCityAreas("osm-relation-1891506");
+        const recheck = await provider.checkForUpdate(after.city);
+
+        return {
+          detectedOldVersion: check.currentVersion,
+          detectedNewVersion: check.latestVersion,
+          installedVersion: after.city.package?.version,
+          installedHash: after.city.package?.contentHash,
+          diffStreetsModified: diff.streets?.modified?.length || 0,
+          renamedStreetV2: after.streets.find(s => s.id === "osm-relation-1891506:osm-relation-160880:street-abt-maurus-kaufmann-weg-1yfiyx6")?.name,
+          localUserAreaPreserved: areas.some(a => a.id === "user-area-local-fire-district"),
+          hasUpdateAfter: recheck.hasUpdate
+        };
+      })()`);
+
+      if (updateResult.installedVersion !== "1.1.0"
+        || !updateResult.localUserAreaPreserved
+        || updateResult.hasUpdateAfter
+        || updateResult.renamedStreetV2 !== "SYNTHETIC V2 Maurus Weg") {
+        throw new Error(`Curated Update v1 → v2 fehlgeschlagen: ${JSON.stringify(updateResult)}`);
+      }
+      console.log(`✓ Curated Update v1 → v2 PASS: Version 1.1.0 atomar installiert, lokales Wachgebiet erhalten, ${updateResult.diffStreetsModified} modifizierte Straßen, hasUpdateAfter = false`);
+
+      // G. Spielrunde nach Update
+      await playCurrentRound("Curated Dataset nach v2 Update");
+      console.log("✓ PHASE 18 BROWSER/CURATED/OFFLINE/UPDATE PASS");
+      console.log("============================================================");
+    }
+
+    if (phase18Only) {
+      await runPhase18CuratedSuite();
+      return;
+    }
+
+    if (phase173Only) {
+      console.log("\n--- Phase 17.3 Oberasbach Polygoneditor-Matrix ---");
+      await cdp.eval(`(async () => {
+        await window.StrassentrainerRuntime.ready;
+        document.getElementById("createTrainingAreaButton").click();
+        document.getElementById("trainingAreaKindSelect").value = "custom";
+        document.getElementById("trainingAreaNameInput").value = "TA-POLYGON-001 Browser innen";
+        document.getElementById("startTrainingAreaDrawingButton").click();
+        document.getElementById("map").scrollIntoView({ block: "center", inline: "center" });
+        await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+      })()`);
+      const editorPoints = await cdp.eval(`[[10.950,49.430],[10.952,49.430],[10.952,49.432],[10.950,49.432]].map(window.STRASSENTRAINER_DEBUG.projectMapCoordinate)`);
+      for (const point of editorPoints) {
+        await cdp.send("Input.dispatchMouseEvent", { type: "mousePressed", x: point.x, y: point.y, button: "left", clickCount: 1 });
+        await cdp.send("Input.dispatchMouseEvent", { type: "mouseReleased", x: point.x, y: point.y, button: "left", clickCount: 1 });
+      }
+      const editorPointCount = await cdp.eval(`document.getElementById("trainingAreaPointCount").textContent`);
+      if (!/4 Punkte/.test(editorPointCount)) throw new Error(`Oberasbach Editor übernahm native Punkte nicht: ${editorPointCount}`);
+      await cdp.eval(`document.getElementById("finishTrainingAreaButton").click()`);
+      const insideArea = await cdp.eval(`(async () => {
+        const deadline = performance.now() + 5000;
+        while (performance.now() < deadline) {
+          const area = window.StrassentrainerRuntime.getActiveTrainingArea();
+          if (area?.name === "TA-POLYGON-001 Browser innen") {
+            const membership = window.StrassentrainerRuntime.getTrainingAreaMembership(area.id);
+            return { id: area.id, geometry: area.boundary, streets: membership.streets.length, pois: membership.pois.length };
+          }
+          await new Promise(resolve => setTimeout(resolve, 25));
+        }
+        return null;
+      })()`);
+      if (!insideArea?.id || insideArea.geometry?.type !== "Polygon" || insideArea.streets < 1) {
+        throw new Error(`Oberasbach Inside-Editor fehlgeschlagen: ${JSON.stringify(insideArea)}`);
+      }
+      await playCurrentRound("Oberasbach inside + native Spielinteraktion");
+
+      const oberasbachMatrix = await cdp.eval(`(() => {
+        const classifyCreate = (name, points) => {
+          try {
+            const area = window.StrassentrainerRuntime.createTrainingArea({ name, kind: "custom", points });
+            return { accepted: true, status: window.StrassentrainerCustomTrainingAreas.classifyAreaContainment(area.boundary, window.StrassentrainerRuntime.getActiveCity().boundary).status };
+          } catch (error) {
+            return { accepted: false, code: error.code, status: error.containmentStatus };
+          }
+        };
+        return {
+          partial: classifyCreate("Browser partial", [[10.997,49.420],[11.005,49.420],[11.005,49.425],[10.997,49.425]]),
+          outside: classifyCreate("Browser outside", [[11.010,49.420],[11.020,49.420],[11.020,49.430],[11.010,49.430]]),
+          boundary: classifyCreate("Browser boundary", [[10.9914402,49.4360544],[10.9914718,49.4360287],[10.991227272,49.435917021]])
+        };
+      })()`);
+      if (oberasbachMatrix.partial.accepted || oberasbachMatrix.partial.status !== "partial"
+        || oberasbachMatrix.outside.accepted || oberasbachMatrix.outside.status !== "outside"
+        || !oberasbachMatrix.boundary.accepted || oberasbachMatrix.boundary.status !== "boundary_touch") {
+        throw new Error(`Oberasbach Containment-Matrix fehlgeschlagen: ${JSON.stringify(oberasbachMatrix)}`);
+      }
+      console.log("✓ Oberasbach partial REJECT, outside REJECT, boundary-touch ACCEPT");
+
+      await cdp.send("Page.reload");
+      await new Promise(resolve => setTimeout(resolve, 1200));
+      const persisted = await cdp.eval(`(async () => { await window.StrassentrainerRuntime.ready; return window.StrassentrainerRuntime.getActiveTrainingArea()?.id || null; })()`);
+      if (persisted !== insideArea.id) throw new Error(`Oberasbach Custom Area Reload fehlgeschlagen: ${persisted}`);
+      await cdp.send("Network.emulateNetworkConditions", { offline: true, latency: 0, downloadThroughput: 0, uploadThroughput: 0 });
+      networkRequests.length = 0;
+      await cdp.send("Page.reload");
+      await new Promise(resolve => setTimeout(resolve, 1200));
+      const offlinePersisted = await cdp.eval(`(async () => { await window.StrassentrainerRuntime.ready; return window.StrassentrainerRuntime.getActiveTrainingArea()?.id || null; })()`);
+      if (offlinePersisted !== insideArea.id) throw new Error("Oberasbach Custom Area offline nicht wiederhergestellt");
+      await playCurrentRound("Oberasbach offline gespeicherte Area");
+      const offlineForbidden = networkRequests.filter(url => /catalog\.json|\/data\/datasets\/|nominatim|overpass/i.test(url));
+      if (offlineForbidden.length) throw new Error(`Oberasbach Offline-Audit fehlgeschlagen: ${JSON.stringify(offlineForbidden)}`);
+      await cdp.send("Network.emulateNetworkConditions", { offline: false, latency: 0, downloadThroughput: -1, uploadThroughput: -1 });
+      await cdp.send("Page.reload");
+      await new Promise(resolve => setTimeout(resolve, 1200));
+      console.log("✓ Oberasbach Reload + Offline + Gameplay PASS");
     }
 
     // Hilfsfunktion zur Installation und Verifikation eines Datensatzes aus dist/
@@ -388,14 +766,12 @@ async function runBrowserPublishingRepositoryTest() {
       return installResult;
     }
 
-    // Step A: Wenden aus Repository
-    await installAndPlayDataset("de-nw-wenden", "Wenden");
-
-    // Step B: Köln aus Repository
-    await installAndPlayDataset("de-nw-koeln", "Köln");
-
-    // Step C: Zirndorf aus Repository
-    await installAndPlayDataset("de-by-zirndorf", "Zirndorf");
+    if (!phase172Only) {
+      // Step A-C: Publisher-Regression der repräsentativen Datasets.
+      await installAndPlayDataset("de-nw-wenden", "Wenden");
+      await installAndPlayDataset("de-nw-koeln", "Köln");
+      await installAndPlayDataset("de-by-zirndorf", "Zirndorf");
+    }
 
     // Step D: Kreis Olpe über den normalen sichtbaren Benutzerpfad installieren.
     console.log("\n--- Installiere Kreis Olpe über Katalogdialog und immutable Publisher-URL ---");
@@ -517,6 +893,188 @@ async function runBrowserPublishingRepositoryTest() {
       throw new Error(`District-Score ungültig: ${JSON.stringify(districtScore)}`);
     }
     console.log(`✓ District-Gameplay PASS: "${districtRound.question}", ${districtScore.distanceMeters.toFixed(1)} m, ${districtScore.points} Punkte`);
+
+    if (phase173Only) {
+      console.log("\n--- Phase 17.3 Kreis-Olpe Polygon-Matrix ---");
+      const districtMatrix = await cdp.eval(`(() => {
+        const api = window.StrassentrainerCustomTrainingAreas;
+        const cityBoundary = window.StrassentrainerRuntime.getActiveCity().boundary;
+        const create = (name, points) => {
+          try {
+            const area = window.StrassentrainerRuntime.createTrainingArea({ name, kind: "response_area", points });
+            return { accepted: true, status: api.classifyAreaContainment(area.boundary, cityBoundary).status, area };
+          } catch (error) {
+            return { accepted: false, code: error.code, status: error.containmentStatus };
+          }
+        };
+        const inside = create("SYNTHETIC Olpe inside", [[7.840,51.028],[7.844,51.028],[7.844,51.032],[7.840,51.032]]);
+        const cross = create("SYNTHETIC cross municipality", [[7.855,50.960],[7.890,50.990],[7.895,50.995],[7.860,50.965]]);
+        const partial = create("SYNTHETIC Olpe partial", [[8.240,51.050],[8.270,51.050],[8.270,51.080],[8.240,51.080]]);
+        const outside = create("SYNTHETIC Olpe outside", [[8.300,51.050],[8.320,51.050],[8.320,51.080],[8.300,51.080]]);
+        const memberships = cross.accepted
+          ? api.computeMembership("osm-relation-1891506", cross.area, window.STRASSENTRAINER_DEBUG.getTargets().streets, window.STRASSENTRAINER_DEBUG.getTargets().pois, { force: true })
+          : null;
+        return {
+          inside: { accepted: inside.accepted, status: inside.status },
+          cross: { accepted: cross.accepted, status: cross.status, streets: memberships?.streetTargets?.length || 0, pois: memberships?.poiTargets?.length || 0 },
+          partial: { accepted: partial.accepted, status: partial.status },
+          outside: { accepted: outside.accepted, status: outside.status }
+        };
+      })()`);
+      if (!districtMatrix.inside.accepted || districtMatrix.inside.status !== "inside"
+        || !districtMatrix.cross.accepted || districtMatrix.cross.status !== "inside"
+        || districtMatrix.partial.accepted || districtMatrix.partial.status !== "partial"
+        || districtMatrix.outside.accepted || districtMatrix.outside.status !== "outside") {
+        throw new Error(`Kreis-Olpe Polygon-Matrix fehlgeschlagen: ${JSON.stringify(districtMatrix)}`);
+      }
+      const forbidden = networkRequests.filter(url => /nominatim|overpass/i.test(url));
+      if (forbidden.length) throw new Error(`Phase 17.3 Geocoder-Audit fehlgeschlagen: ${JSON.stringify(forbidden)}`);
+      console.log(`✓ Kreis Olpe inside ACCEPT, partial REJECT, outside REJECT, cross-municipality ACCEPT (${districtMatrix.cross.streets} Straßen/${districtMatrix.cross.pois} POIs)`);
+      console.log("✓ PHASE 17.3 BROWSER MATRIX PASS — TA-POLYGON-001 RESOLVED");
+      return;
+    }
+
+    if (phase172Only) {
+      console.log("\n--- Phase 17.2: lokales synthetisches Feuerwehr-Einsatzgebiet ---");
+      await cdp.eval(`(() => {
+        window.StrassentrainerRuntime.activateTrainingArea("", { force: true });
+        document.getElementById("createTrainingAreaButton").click();
+        document.getElementById("trainingAreaKindSelect").value = "response_area";
+        document.getElementById("trainingAreaNameInput").value = "SYNTHETIC CDP Response Area";
+        document.getElementById("startTrainingAreaDrawingButton").click();
+      })()`);
+      const drawingPoints = await cdp.eval(`(async () => {
+        document.getElementById("map").scrollIntoView({ block: "center", inline: "center" });
+        await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+        return [[7.840, 51.028], [7.844, 51.028], [7.844, 51.032], [7.840, 51.032]]
+          .map(window.STRASSENTRAINER_DEBUG.projectMapCoordinate);
+      })()`);
+      for (const { x, y } of drawingPoints) {
+        await cdp.send("Input.dispatchMouseEvent", { type: "mousePressed", x, y, button: "left", clickCount: 1 });
+        await cdp.send("Input.dispatchMouseEvent", { type: "mouseReleased", x, y, button: "left", clickCount: 1 });
+      }
+      const pointCount = await cdp.eval(`document.getElementById("trainingAreaPointCount").textContent`);
+      if (!/4 Punkte/.test(pointCount)) throw new Error(`Native Editor-Klicks wurden nicht vollständig übernommen: ${pointCount}; ${JSON.stringify(drawingPoints)}`);
+      await cdp.eval(`document.getElementById("finishTrainingAreaButton").click()`);
+      const responseArea = await cdp.eval(`(async () => {
+        const deadline = performance.now() + 5000;
+        while (performance.now() < deadline) {
+          const area = window.StrassentrainerRuntime.getActiveTrainingArea();
+          if (area?.name === "SYNTHETIC CDP Response Area") {
+            const stored = await window.StrassentrainerCityStorage.getCityAreas("osm-relation-1891506");
+            const membership = window.StrassentrainerRuntime.getTrainingAreaMembership(area.id);
+            return {
+              id: area.id, cityId: area.cityId, datasetId: area.datasetId, kind: area.kind,
+              source: area.source, local: area.local, type: area.boundary?.type,
+              stored: stored.some(candidate => candidate.id === area.id),
+              streets: membership?.streets?.length || 0, pois: membership?.pois?.length || 0,
+              selectorText: document.getElementById("trainingAreaSelect").selectedOptions[0]?.textContent || ""
+            };
+          }
+          await new Promise(resolve => setTimeout(resolve, 25));
+        }
+        return {
+          timeout: true,
+          editorMessage: document.getElementById("trainingAreaEditorMessage")?.textContent || "",
+          status: document.getElementById("statusText")?.textContent || "",
+          activeName: window.StrassentrainerRuntime.getActiveTrainingArea()?.name || null
+        };
+      })()`);
+      if (!responseArea || responseArea.timeout || !String(responseArea.id || "").startsWith("user-area-")
+        || responseArea.cityId !== "osm-relation-1891506" || responseArea.datasetId !== responseArea.cityId
+        || responseArea.kind !== "response_area" || responseArea.source !== "user" || responseArea.local !== true
+        || responseArea.type !== "Polygon" || !responseArea.stored || responseArea.streets < 1
+        || !responseArea.selectorText.includes("Einsatzgebiet")) {
+        throw new Error(`Response-Area-Modell/Storage/Membership ungültig: ${JSON.stringify(responseArea)}`);
+      }
+      console.log(`✓ Native Editor-Interaktion, Persistenz und Membership PASS: ${responseArea.streets} Straßen, ${responseArea.pois} POIs`);
+
+      const switching = await cdp.eval(`(() => {
+        const responseId = ${JSON.stringify("__RESPONSE_ID__")}.replace("__RESPONSE_ID__", ${JSON.stringify("")});
+        const actualId = window.StrassentrainerRuntime.getTrainingAreas().find(area => area.name === "SYNTHETIC CDP Response Area").id;
+        const sequence = ["", "osm-relation-163179", actualId, "osm-relation-163179", ""];
+        const results = sequence.map(id => window.StrassentrainerRuntime.activateTrainingArea(id, { force: true }));
+        window.StrassentrainerRuntime.activateTrainingArea(actualId, { force: true });
+        return { results, active: window.StrassentrainerRuntime.getActiveTrainingArea()?.id, actualId };
+      })()`);
+      if (switching.results.some(result => !result) || switching.active !== responseArea.id) {
+        throw new Error(`Response-Area-Switching fehlgeschlagen: ${JSON.stringify(switching)}`);
+      }
+
+      async function playActiveResponse(label) {
+        const prepared = await cdp.eval(`(async () => {
+          document.getElementById("mainButton").click();
+          const deadline = performance.now() + 5000;
+          while (performance.now() < deadline) {
+            const state = window.STRASSENTRAINER_DEBUG.getGameState();
+            if (state.status === "active" && state.currentRound?.target?.geometry) {
+              const area = window.StrassentrainerRuntime.getActiveTrainingArea();
+              const membership = window.StrassentrainerRuntime.getTrainingAreaMembership(area.id);
+              const map = document.getElementById("map");
+              map.scrollIntoView({ block: "center", inline: "center" });
+              await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+              const rect = map.getBoundingClientRect();
+              return {
+                question: document.getElementById("targetStreet").textContent.trim(),
+                targetId: state.currentRound.target.id,
+                geometryValid: window.StrassentrainerTargets.isValidTargetGeometry(state.currentRound.target, window.StreetGeometry),
+                belongs: [...membership.streets, ...membership.pois].some(target => target.id === state.currentRound.target.id),
+                x: rect.left + rect.width / 2, y: rect.top + rect.height / 2
+              };
+            }
+            await new Promise(resolve => setTimeout(resolve, 25));
+          }
+          throw new Error("Response-Area-Runde wurde nicht aktiv");
+        })()`);
+        if (!prepared.question || !prepared.targetId || !prepared.geometryValid || !prepared.belongs) {
+          throw new Error(`${label} Response-Area-Frage ungültig: ${JSON.stringify(prepared)}`);
+        }
+        await cdp.send("Input.dispatchMouseEvent", { type: "mousePressed", x: prepared.x, y: prepared.y, button: "left", clickCount: 1 });
+        await cdp.send("Input.dispatchMouseEvent", { type: "mouseReleased", x: prepared.x, y: prepared.y, button: "left", clickCount: 1 });
+        const score = await cdp.eval(`(async () => {
+          const deadline = performance.now() + 5000;
+          while (performance.now() < deadline) {
+            const result = window.STRASSENTRAINER_DEBUG.getGameState().currentRound?.result;
+            if (result) return result;
+            await new Promise(resolve => setTimeout(resolve, 25));
+          }
+          throw new Error("Response-Area-Kartenklick wurde nicht ausgewertet");
+        })()`);
+        if (!Number.isFinite(score.distanceMeters) || !Number.isFinite(score.points)) {
+          throw new Error(`${label} Response-Area-Score ungültig: ${JSON.stringify(score)}`);
+        }
+        console.log(`✓ ${label} Response-Area-Runde PASS: "${prepared.question}", ${score.distanceMeters.toFixed(1)} m, ${score.points} Punkte`);
+      }
+
+      await playActiveResponse("Online");
+      await cdp.send("Page.reload");
+      await new Promise(resolve => setTimeout(resolve, 1200));
+      const reloadArea = await cdp.eval(`(async () => {
+        await window.StrassentrainerRuntime.ready;
+        const area = window.StrassentrainerRuntime.getActiveTrainingArea();
+        return area ? { id: area.id, name: area.name } : null;
+      })()`);
+      if (reloadArea?.id !== responseArea.id) throw new Error(`Response Area nach Reload nicht aktiv: ${JSON.stringify(reloadArea)}`);
+      console.log("✓ Response Area Reload PASS");
+
+      await cdp.send("Network.emulateNetworkConditions", { offline: true, latency: 0, downloadThroughput: 0, uploadThroughput: 0 });
+      networkRequests.length = 0;
+      await cdp.send("Page.reload");
+      await new Promise(resolve => setTimeout(resolve, 1200));
+      const offlineArea = await cdp.eval(`(async () => {
+        await window.StrassentrainerRuntime.ready;
+        const area = window.StrassentrainerRuntime.getActiveTrainingArea();
+        return area ? { id: area.id, name: area.name } : null;
+      })()`);
+      if (offlineArea?.id !== responseArea.id) throw new Error(`Response Area offline nicht aktiv: ${JSON.stringify(offlineArea)}`);
+      await playActiveResponse("Offline");
+      const forbiddenRequests = networkRequests.filter(url => /catalog\.json|\/data\/datasets\/|nominatim|overpass/i.test(url));
+      if (forbiddenRequests.length) throw new Error(`Offline Response Area erzeugte Datenrequests: ${JSON.stringify(forbiddenRequests)}`);
+      const geocoderRequests = networkRequests.filter(url => /nominatim|overpass/i.test(url));
+      if (geocoderRequests.length) throw new Error(`Geocoder-Audit fehlgeschlagen: ${JSON.stringify(geocoderRequests)}`);
+      console.log("✓ PHASE 17.2 BROWSER/RELOAD/OFFLINE PASS — Catalog 0, Package 0, Nominatim 0, Overpass 0");
+      return;
+    }
 
     if (phase17Only) {
       await cdp.eval(`window.StrassentrainerRuntime.activateTrainingArea("")`);
@@ -896,6 +1454,8 @@ async function runBrowserPublishingRepositoryTest() {
     console.log(`  Erwarteter Hash: ${integrityCheckResult.expected}`);
     console.log(`  Tatsächlicher Hash: ${integrityCheckResult.actual}`);
 
+    await runPhase18CuratedSuite();
+
     console.log("\n============================================================");
     console.log("✓ ALLE BROWSER-REPOSITORY-TESTS VOLLSTÄNDIG BESTANDEN (PASS)");
     console.log("============================================================");
@@ -905,6 +1465,9 @@ async function runBrowserPublishingRepositoryTest() {
     await new Promise(r => setTimeout(r, 600));
     try {
       fs.rmSync(userDataDir, { recursive: true, force: true });
+    } catch (_) {}
+    try {
+      fs.rmSync(curatedTemp, { recursive: true, force: true });
     } catch (_) {}
     server.close();
   }

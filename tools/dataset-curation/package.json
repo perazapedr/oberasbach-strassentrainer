@@ -1,0 +1,9 @@
+{
+  "name": "strassentrainer-dataset-curation",
+  "private": true,
+  "version": "1.0.0",
+  "type": "commonjs",
+  "scripts": {
+    "test": "node --test ../../tests/dataset-curation-tests.js"
+  }
+}

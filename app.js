@@ -117,6 +117,8 @@ const els = {
   trainingAreaFieldGroup: document.getElementById("trainingAreaFieldGroup"),
   trainingAreaSelect: document.getElementById("trainingAreaSelect"),
   createTrainingAreaButton: document.getElementById("createTrainingAreaButton"),
+  importTrainingAreaButton: document.getElementById("importTrainingAreaButton"),
+  trainingAreaImportInput: document.getElementById("trainingAreaImportInput"),
   deleteTrainingAreaButton: document.getElementById("deleteTrainingAreaButton"),
   trainingAreaEditor: document.getElementById("trainingAreaEditor"),
   trainingAreaEditorSetup: document.getElementById("trainingAreaEditorSetup"),
@@ -895,6 +897,7 @@ function renderTrainingAreaSelect(context) {
   if (!els.trainingAreaSelect || !els.trainingAreaFieldGroup) return;
   const areas = Array.isArray(context?.areas) ? context.areas : [];
   if (els.createTrainingAreaButton) els.createTrainingAreaButton.disabled = !context?.metadata?.id;
+  if (els.importTrainingAreaButton) els.importTrainingAreaButton.disabled = !context?.metadata?.id;
   if (areas.length === 0) {
     els.trainingAreaFieldGroup.classList.remove("hidden");
     const wholeDatasetLabel = context?.metadata?.datasetKind === "district"
@@ -915,7 +918,9 @@ function renderTrainingAreaSelect(context) {
     : "Gesamte Stadt";
   els.trainingAreaSelect.appendChild(defaultOption);
 
-  const administrativeAreas = areas.filter(area => !customTrainingAreaApi || !customTrainingAreaApi.isUserArea(area));
+  const administrativeAreas = areas.filter(area => !customTrainingAreaApi
+    || (!customTrainingAreaApi.isUserArea(area) && !customTrainingAreaApi.isResponseArea(area)));
+  const responseAreas = areas.filter(area => customTrainingAreaApi && customTrainingAreaApi.isResponseArea(area));
   const userAreas = areas.filter(area => customTrainingAreaApi && customTrainingAreaApi.isUserArea(area));
   const byAreaName = (a, b) => String(a.name || "").localeCompare(String(b.name || ""), "de", { sensitivity: "base" });
   const topLevel = administrativeAreas
@@ -951,12 +956,27 @@ function renderTrainingAreaSelect(context) {
     }
   }
 
-  if (userAreas.length > 0) {
+  if (responseAreas.length > 0) {
+    const separator = document.createElement("option");
+    separator.disabled = true;
+    separator.textContent = "── Feuerwehr-Einsatzgebiete ──";
+    els.trainingAreaSelect.appendChild(separator);
+    for (const area of [...responseAreas].sort(byAreaName)) {
+      const option = document.createElement("option");
+      option.value = area.id;
+      option.disabled = Boolean(area.invalid);
+      option.textContent = `${area.name} · Einsatzgebiet · ${area.source === "curated" ? "kuratiert" : "lokal"}${area.invalid ? " (nicht verfügbar)" : ""}`;
+      els.trainingAreaSelect.appendChild(option);
+    }
+  }
+
+  const customUserAreas = userAreas.filter(area => area.kind !== "response_area");
+  if (customUserAreas.length > 0) {
     const separator = document.createElement("option");
     separator.disabled = true;
     separator.textContent = "── Eigene Trainingsgebiete ──";
     els.trainingAreaSelect.appendChild(separator);
-    for (const area of userAreas.sort((a, b) => a.name.localeCompare(b.name, "de", { sensitivity: "base" }))) {
+    for (const area of customUserAreas.sort((a, b) => a.name.localeCompare(b.name, "de", { sensitivity: "base" }))) {
       const option = document.createElement("option");
       option.value = area.id;
       option.disabled = Boolean(area.invalid);
@@ -1253,6 +1273,44 @@ async function finishTrainingAreaDrawing() {
   } catch (error) {
     setTrainingAreaEditorMessage(error.message || "Das Trainingsgebiet konnte nicht gespeichert werden.", true);
     return false;
+  }
+}
+
+async function importTrainingAreaFile(event) {
+  const input = event?.target || els.trainingAreaImportInput;
+  const file = input?.files?.[0];
+  if (!file || !cityContext || !customTrainingAreaApi) return false;
+  try {
+    if (file.size > 2 * 1024 * 1024) throw new Error("Die Gebietsdatei darf höchstens 2 MiB groß sein.");
+    const payload = JSON.parse(await file.text());
+    const inferredName = String(payload?.properties?.name || payload?.name || file.name.replace(/\.(geo)?json$/i, "")).trim();
+    const area = customTrainingAreaApi.importResponseArea(payload, {
+      datasetId: cityContext.metadata.id,
+      name: inferredName,
+      cityBoundary: cityContext.metadata.boundary,
+      existingAreas: cityContext.areas
+    });
+    const membership = customTrainingAreaApi.computeMembership(
+      cityContext.metadata.id,
+      area,
+      cityContext.allStreetTargets,
+      cityContext.allPoiTargets,
+      { force: true }
+    );
+    area.streetCount = membership.streetTargets.length;
+    area.poiCount = membership.poiTargets.length;
+    const storage = window.StrassentrainerCityStorage;
+    if (!storage || typeof storage.saveArea !== "function") throw new Error("Der lokale Gebiets-Speicher ist nicht verfügbar.");
+    await storage.saveArea(area);
+    cityContext.areas.push(normalizedTrainingArea(area));
+    activateTrainingArea(area.id, { force: true });
+    setStatus(`Einsatzgebiet „${area.name}“ importiert. ${area.streetCount} spielbare Straßen, ${area.poiCount} POIs.`, "ready");
+    return area;
+  } catch (error) {
+    setStatus(error.message || "Das Einsatzgebiet konnte nicht importiert werden.", "error");
+    return false;
+  } finally {
+    if (input) input.value = "";
   }
 }
 
@@ -1595,7 +1653,8 @@ function getEligibleTargetsByType(targetType) {
       && selectedCategories.has(target.category));
   }
   return contentRepository.streetTargets.filter(target =>
-    !contentRepository.unavailableTargetIds.has(target.id));
+    target.active && target.quizEligible
+    && !contentRepository.unavailableTargetIds.has(target.id));
 }
 
 function getConfiguredTargetTypes() {
@@ -2823,6 +2882,14 @@ function getDebugGameState() {
 }
 
 window.STRASSENTRAINER_DEBUG = {
+  projectMapCoordinate: coordinate => {
+    const lon = Number(coordinate?.[0]);
+    const lat = Number(coordinate?.[1]);
+    if (!Number.isFinite(lon) || !Number.isFinite(lat)) return null;
+    const point = map.latLngToContainerPoint([lat, lon]);
+    const rect = document.getElementById("map").getBoundingClientRect();
+    return { x: rect.left + point.x, y: rect.top + point.y };
+  },
   getCurrentGeometry: () => isExamInProgress()
     ? { locked: true, message: "Geometriediagnose während der Prüfung gesperrt." }
     : getGeometryDiagnostics(),
@@ -2847,6 +2914,9 @@ window.STRASSENTRAINER_DEBUG = {
       streets: contentRepository.streetTargets.map(target => ({ ...target, geometry: null })),
       pois: contentRepository.poiTargets.map(target => ({ ...target }))
     },
+  getEligibleTargets: (type = "street") => isExamInProgress()
+    ? { locked: true, message: "Zieldaten sind während der Prüfung gesperrt." }
+    : getEligibleTargetsByType(type).map(target => ({ ...target, geometry: null })),
   showExamRound: roundNumber => showExamRoundOnMap(Number(roundNumber)),
   prepareStreet: nameOrId => prepareStreetForDebug(nameOrId)
 };
@@ -2860,6 +2930,10 @@ if (els.trainingAreaSelect) {
   els.trainingAreaSelect.addEventListener("change", handleTrainingAreaChange);
 }
 if (els.createTrainingAreaButton) els.createTrainingAreaButton.addEventListener("click", openTrainingAreaEditor);
+if (els.importTrainingAreaButton && els.trainingAreaImportInput) {
+  els.importTrainingAreaButton.addEventListener("click", () => els.trainingAreaImportInput.click());
+  els.trainingAreaImportInput.addEventListener("change", importTrainingAreaFile);
+}
 if (els.deleteTrainingAreaButton) els.deleteTrainingAreaButton.addEventListener("click", deleteActiveTrainingArea);
 if (els.startTrainingAreaDrawingButton) els.startTrainingAreaDrawingButton.addEventListener("click", startTrainingAreaDrawing);
 if (els.cancelTrainingAreaEditorButton) els.cancelTrainingAreaEditorButton.addEventListener("click", closeTrainingAreaEditor);

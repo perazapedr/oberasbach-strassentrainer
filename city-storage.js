@@ -130,6 +130,9 @@
       if (area.cityId !== cityId) {
         throw new Error(`Gebiet "${area.id}" gehört nicht zur Stadt "${cityId}" (hat cityId "${area.cityId}").`);
       }
+      if (area.datasetId !== undefined && area.datasetId !== cityId) {
+        throw new Error(`Gebiet "${area.id}" gehört zu einem anderen Dataset.`);
+      }
       if (typeof area.name !== "string" || area.name.trim().length === 0) {
         throw new Error(`Gebiet "${area.id}" besitzt keinen gültigen Namen.`);
       }
@@ -141,6 +144,9 @@
       }
       if (area.source === "user" && !["response_area", "custom"].includes(area.kind)) {
         throw new Error(`Benutzergebiet "${area.id}" benötigt den Typ custom oder response_area.`);
+      }
+      if (area.kind === "response_area" && !["user", "curated"].includes(area.source)) {
+        throw new Error(`Feuerwehr-Einsatzgebiet "${area.id}" benötigt die Quelle user oder curated.`);
       }
     }
   }
