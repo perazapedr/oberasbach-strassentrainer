@@ -1,0 +1,11 @@
+{
+  "name": "strassentrainer-dataset-audit",
+  "private": true,
+  "version": "1.0.0",
+  "type": "commonjs",
+  "main": "index.js",
+  "scripts": {
+    "audit": "node index.js"
+  }
+}
+
