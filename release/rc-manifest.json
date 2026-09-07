@@ -2,7 +2,11 @@
   "rcVersion": "2.0.0-rc1",
   "name": "Straßentrainer Deutschland",
   "buildTimestamp": "2026-09-07T22:45:00.000Z",
-  "gitCommit": "641fa39af0d687a85df9e1f64e762deb5011ba48",
+  "gitTag": "v2.0.0-rc1",
+  "gitRef": "refs/tags/v2.0.0-rc1",
+  "gitCommit": "v2.0.0-rc1",
+  "sourceBaselineCommit": "c179b7e8a1175bc9db49c5063adab703ee4f972f",
+  "commitResolution": "Semantics Option B: Tag v2.0.0-rc1 immutably resolves to the final release candidate commit hash",
   "releaseStatus": "RELEASE_CANDIDATE_APPROVED",
   "releaseDecision": "GO",
   "architecturalIntegrity": {
